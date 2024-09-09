@@ -1,6 +1,14 @@
-from module.Attention import *
-from module.CPUEmbedding import *
-from module.Common import *
+from module.Attention import LinearAttention
+from module.CPUEmbedding import CPUEmbedding
+from module.Common import drop_input_independent, NonLinear
+import logging
+from CONSTANTS import SESSION, LOG_ROOT, device
+import os
+import sys
+import torch
+import torch.nn as nn
+import torch.mps
+from torch.nn.parameter import Parameter
 
 
 class AttGRUModel(nn.Module):
@@ -32,7 +40,8 @@ class AttGRUModel(nn.Module):
         self.dropout = dropout
         self.logger.info('==== Model Parameters ====')
         vocab_size, word_dims = vocab.vocab_size, vocab.word_dim
-        self.word_embed = CPUEmbedding(vocab_size, word_dims, padding_idx=vocab_size - 1)
+        self.word_embed = CPUEmbedding(
+            vocab_size, word_dims, padding_idx=vocab_size - 1)
         self.word_embed.weight.data.copy_(torch.from_numpy(vocab.embeddings))
         self.word_embed.weight.requires_grad = False
         self.logger.info('Input Dimension: %d' % word_dims)
@@ -45,13 +54,16 @@ class AttGRUModel(nn.Module):
         self.sent_dim = 2 * lstm_hiddens
         self.atten_guide = Parameter(torch.Tensor(self.sent_dim))
         self.atten_guide.data.normal_(0, 1)
-        self.atten = LinearAttention(tensor_1_dim=self.sent_dim, tensor_2_dim=self.sent_dim)
+        self.atten = LinearAttention(
+            tensor_1_dim=self.sent_dim, tensor_2_dim=self.sent_dim)
         self.proj = NonLinear(self.sent_dim, 2)
 
     def reset_word_embed_weight(self, vocab, pretrained_embedding):
         vocab_size, word_dims = pretrained_embedding.shape
-        self.word_embed = CPUEmbedding(vocab.vocab_size, word_dims, padding_idx=vocab.PAD)
-        self.word_embed.weight.data.copy_(torch.from_numpy(pretrained_embedding))
+        self.word_embed = CPUEmbedding(
+            vocab.vocab_size, word_dims, padding_idx=vocab.PAD)
+        self.word_embed.weight.data.copy_(
+            torch.from_numpy(pretrained_embedding))
         self.word_embed.weight.requires_grad = False
 
     def forward(self, inputs):
@@ -59,9 +71,11 @@ class AttGRUModel(nn.Module):
         embed = self.word_embed(words)
         if self.training:
             embed = drop_input_independent(embed, self.dropout)
-        embed = embed.cuda(device)
+        if torch.mps.is_available():
+            embed = embed.to(device)
         batch_size = embed.size(0)
-        atten_guide = torch.unsqueeze(self.atten_guide, dim=1).expand(-1, batch_size)
+        atten_guide = torch.unsqueeze(
+            self.atten_guide, dim=1).expand(-1, batch_size)
         atten_guide = atten_guide.transpose(1, 0)
         hiddens, state = self.rnn(embed)
         sent_probs = self.atten(atten_guide, hiddens, masks)

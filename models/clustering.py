@@ -1,11 +1,15 @@
+import logging
+from utils.common import metrics
+from hdbscan import HDBSCAN as dbscan
+from scipy.spatial.distance import cdist
+import numpy as np
+from CONSTANTS import GET_LOGS_ROOT, SESSION
+import os
+import time
 import sys
 
 sys.path.extend([".", ".."])
-from CONSTANTS import *
-import numpy as np
-from scipy.spatial.distance import pdist, cdist
-from hdbscan import HDBSCAN as dbscan
-from utils.common import metrics
+
 
 class Solitary_HDBSCAN():
     def __init__(self, min_cluster_size, min_samples, mode='normal-only'):
@@ -18,7 +22,8 @@ class Solitary_HDBSCAN():
         console_handler.setFormatter(
             logging.Formatter("%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"))
 
-        file_handler = logging.FileHandler(os.path.join(LOG_ROOT, 'Solitary_HDBSCAN.log'))
+        file_handler = logging.FileHandler(
+            os.path.join(LOG_ROOT, 'Solitary_HDBSCAN.log'))
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(
             logging.Formatter("%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"))
@@ -51,7 +56,8 @@ class Solitary_HDBSCAN():
         self.labels = self.model.fit_predict(inputs).tolist()
         self.clusters = set(self.labels)
         self.outliers = self.model.outlier_scores_.tolist()
-        self.logger.info('Get Total %d clusters in %.2fs' % (len(self.clusters), (time.time() - start_time)))
+        self.logger.info('Get Total %d clusters in %.2fs' %
+                         (len(self.clusters), (time.time() - start_time)))
         return self.labels
 
     def fit(self, inputs):
@@ -69,8 +75,10 @@ class Solitary_HDBSCAN():
                 ground_truth_without_labeled_normal.append(gt)
                 predicted_label_without_labeled_normal.append(label)
             id += 1
-        precision, recall, f = metrics(predicted_label_without_labeled_normal, ground_truth_without_labeled_normal)
-        self.logger.info('Precision %.4f recall %.4f f-score %.4f ' % (precision, recall, f))
+        precision, recall, f = metrics(
+            predicted_label_without_labeled_normal, ground_truth_without_labeled_normal)
+        self.logger.info('Precision %.4f recall %.4f f-score %.4f ' %
+                         (precision, recall, f))
         return precision, recall, f
         pass
 
@@ -93,7 +101,7 @@ class Solitary_HDBSCAN():
         '''
         predicted = []
         assert len(inputs) == len(self.labels)
-        inputs = np.asarray(inputs, dtype=np.float)
+        inputs = np.asarray(inputs, dtype=float)
         self.logger.info('Summarizing labeled normals and their reprs.')
         normal_matrix = []
         for id in normal_ids:
@@ -101,8 +109,9 @@ class Solitary_HDBSCAN():
             if self.labels[id] != -1:
                 self.normal_cores.add(self.labels[id])
         self.logger.info('Normal clusters are: ' + str(self.normal_cores))
-        normal_matrix = np.asarray(normal_matrix, dtype=np.float)
-        self.logger.info('Shape of normal matrix: %d x %d' % (normal_matrix.shape[0], normal_matrix.shape[1]))
+        normal_matrix = np.asarray(normal_matrix, dtype=float)
+        self.logger.info('Shape of normal matrix: %d x %d' %
+                         (normal_matrix.shape[0], normal_matrix.shape[1]))
 
         by_normal_core_normal = 0
         by_normal_core_anomalous = 0
@@ -133,6 +142,6 @@ class Solitary_HDBSCAN():
                 predicted.append('Anomalous')
         self.logger.info(
             'Found %d normal, %d anomalous by normal clusters' % (by_normal_core_normal, by_normal_core_anomalous))
-        self.logger.info('Found %d normal, %d anomalous by minimum distances' % (by_dist_normal, by_dist_anomalous))
+        self.logger.info('Found %d normal, %d anomalous by minimum distances' % (
+            by_dist_normal, by_dist_anomalous))
         return predicted
-

@@ -3,21 +3,19 @@ An *attention* module that computes the similarity between
 an input vector and the rows of a matrix.
 """
 
-import math, random
-import numpy as np
 from typing import List, Sequence, TypeVar
+
 import torch
-from torch.nn import Parameter
-from overrides import overrides
 import torch.nn as nn
+from overrides import overrides
+from torch.nn import Parameter
+
+T = TypeVar("T")
 
 
-T = TypeVar('T')
-
-
-def combine_tensors_and_multiply(combination: str,
-                                 tensors: List[torch.Tensor],
-                                 weights: torch.nn.Parameter) -> torch.Tensor:
+def combine_tensors_and_multiply(
+    combination: str, tensors: List[torch.Tensor], weights: torch.nn.Parameter
+) -> torch.Tensor:
     """
     Like :func:`combine_tensors`, but does a weighted (linear) multiplication while combining.
     This is a separate function from ``combine_tensors`` because we try to avoid instantiating
@@ -38,14 +36,14 @@ def combine_tensors_and_multiply(combination: str,
     """
     if len(tensors) > 9:
         raise Exception("Double-digit tensor lists not currently supported")
-    combination = combination.replace('x', '1').replace('y', '2')
-    pieces = combination.split(',')
+    combination = combination.replace("x", "1").replace("y", "2")
+    pieces = combination.split(",")
     tensor_dims = [tensor.size(-1) for tensor in tensors]
     combination_dims = [_get_combination_dim(piece, tensor_dims) for piece in pieces]
     dims_so_far = 0
     to_sum = []
     for piece, combination_dim in zip(pieces, combination_dims):
-        weight = weights[dims_so_far:(dims_so_far + combination_dim)]
+        weight = weights[dims_so_far : (dims_so_far + combination_dim)]
         dims_so_far += combination_dim
         to_sum.append(_get_combination_and_multiply(piece, tensors, weight))
     result = to_sum[0]
@@ -83,21 +81,21 @@ def _get_combination(combination: str, tensors: List[torch.Tensor]) -> torch.Ten
         first_tensor = _get_combination(combination[0], tensors)
         second_tensor = _get_combination(combination[2], tensors)
         operation = combination[1]
-        if operation == '*':
+        if operation == "*":
             return first_tensor * second_tensor
-        elif operation == '/':
+        elif operation == "/":
             return first_tensor / second_tensor
-        elif operation == '+':
+        elif operation == "+":
             return first_tensor + second_tensor
-        elif operation == '-':
+        elif operation == "-":
             return first_tensor - second_tensor
         else:
             raise Exception("Invalid operation: " + operation)
 
 
-def _get_combination_and_multiply(combination: str,
-                                  tensors: List[torch.Tensor],
-                                  weight: torch.nn.Parameter) -> torch.Tensor:
+def _get_combination_and_multiply(
+    combination: str, tensors: List[torch.Tensor], weight: torch.nn.Parameter
+) -> torch.Tensor:
     if combination.isdigit():
         index = int(combination) - 1
         return torch.matmul(tensors[index], weight)
@@ -107,7 +105,7 @@ def _get_combination_and_multiply(combination: str,
         first_tensor = _get_combination(combination[0], tensors)
         second_tensor = _get_combination(combination[2], tensors)
         operation = combination[1]
-        if operation == '*':
+        if operation == "*":
             if first_tensor.dim() > 4 or second_tensor.dim() > 4:
                 raise ValueError("Tensors with dim > 4 not currently supported")
             desired_dim = max(first_tensor.dim(), second_tensor.dim()) - 1
@@ -122,7 +120,7 @@ def _get_combination_and_multiply(combination: str,
             if result.dim() == desired_dim + 1:
                 result = result.squeeze(-1)
             return result
-        elif operation == '/':
+        elif operation == "/":
             if first_tensor.dim() > 4 or second_tensor.dim() > 4:
                 raise ValueError("Tensors with dim > 4 not currently supported")
             desired_dim = max(first_tensor.dim(), second_tensor.dim()) - 1
@@ -137,10 +135,14 @@ def _get_combination_and_multiply(combination: str,
             if result.dim() == desired_dim + 1:
                 result = result.squeeze(-1)
             return result
-        elif operation == '+':
-            return torch.matmul(first_tensor, weight) + torch.matmul(second_tensor, weight)
-        elif operation == '-':
-            return torch.matmul(first_tensor, weight) - torch.matmul(second_tensor, weight)
+        elif operation == "+":
+            return torch.matmul(first_tensor, weight) + torch.matmul(
+                second_tensor, weight
+            )
+        elif operation == "-":
+            return torch.matmul(first_tensor, weight) - torch.matmul(
+                second_tensor, weight
+            )
         else:
             raise Exception("Invalid operation: " + operation)
 
@@ -162,8 +164,10 @@ def get_combined_dim(combination: str, tensor_dims: List[int]) -> int:
     """
     if len(tensor_dims) > 9:
         raise Exception("Double-digit tensor lists not currently supported")
-    combination = combination.replace('x', '1').replace('y', '2')
-    return sum([_get_combination_dim(piece, tensor_dims) for piece in combination.split(',')])
+    combination = combination.replace("x", "1").replace("y", "2")
+    return sum(
+        [_get_combination_dim(piece, tensor_dims) for piece in combination.split(",")]
+    )
 
 
 def _get_combination_dim(combination: str, tensor_dims: List[int]) -> int:
@@ -177,15 +181,19 @@ def _get_combination_dim(combination: str, tensor_dims: List[int]) -> int:
         second_tensor_dim = _get_combination_dim(combination[2], tensor_dims)
         operation = combination[1]
         if first_tensor_dim != second_tensor_dim:
-            raise Exception("Tensor dims must match for operation \"{}\"".format(operation))
+            raise Exception(
+                'Tensor dims must match for operation "{}"'.format(operation)
+            )
         return first_tensor_dim
 
 
-def masked_softmax(vector: torch.Tensor,
-                   mask: torch.Tensor,
-                   dim: int = -1,
-                   memory_efficient: bool = False,
-                   mask_fill_value: float = -1e32) -> torch.Tensor:
+def masked_softmax(
+    vector: torch.Tensor,
+    mask: torch.Tensor,
+    dim: int = -1,
+    memory_efficient: bool = False,
+    mask_fill_value: float = -1e32,
+) -> torch.Tensor:
     """
     ``torch.nn.functional.softmax(vector)`` does not work if some elements of ``vector`` should be
     masked.  This performs a softmax on just the non-masked portions of ``vector``.  Passing
@@ -237,11 +245,13 @@ class LinearAttention(torch.nn.Module):
         distribution for your attention.  If false, this is just computing a similarity score.
     """
 
-    def __init__(self,
-                 tensor_1_dim: int,
-                 tensor_2_dim: int,
-                 combination: str = 'x,y',
-                 normalize: bool = True) -> None:
+    def __init__(
+        self,
+        tensor_1_dim: int,
+        tensor_2_dim: int,
+        combination: str = "x,y",
+        normalize: bool = True,
+    ) -> None:
         super(LinearAttention, self).__init__()
         self._combination = combination
         combined_dim = get_combined_dim(combination, [tensor_1_dim, tensor_2_dim])
@@ -257,20 +267,24 @@ class LinearAttention(torch.nn.Module):
         self._bias.data.fill_(0)
 
     @overrides(check_signature=False)
-    def forward(self,  # pylint: disable=arguments-differ
-                vector: torch.Tensor,
-                matrix: torch.Tensor,
-                matrix_mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self,  # pylint: disable=arguments-differ
+        vector: torch.Tensor,
+        matrix: torch.Tensor,
+        matrix_mask: torch.Tensor = None,
+    ) -> torch.Tensor:
         similarities = self._forward_internal(vector, matrix)
         if self._normalize:
             return masked_softmax(similarities, matrix_mask)
         else:
             return similarities
 
-    def _forward_internal(self, vector: torch.Tensor, matrix: torch.Tensor) -> torch.Tensor:
-        combined_tensors = combine_tensors_and_multiply(self._combination,
-                                                        [vector.unsqueeze(1), matrix],
-                                                        self._weight_vector)
+    def _forward_internal(
+        self, vector: torch.Tensor, matrix: torch.Tensor
+    ) -> torch.Tensor:
+        combined_tensors = combine_tensors_and_multiply(
+            self._combination, [vector.unsqueeze(1), matrix], self._weight_vector
+        )
 
         return self._activation(combined_tensors.squeeze(1) + self._bias)
 
@@ -298,10 +312,12 @@ class Generator(torch.nn.Module):
         self.project = nn.Linear(in_features=tensor_1_dim, out_features=tensor_2_dim)
 
     @overrides(check_signature=False)
-    def forward(self,  # pylint: disable=arguments-differ
-                vector: torch.Tensor,
-                matrix: torch.Tensor,
-                matrix_mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self,  # pylint: disable=arguments-differ
+        vector: torch.Tensor,
+        matrix: torch.Tensor,
+        matrix_mask: torch.Tensor = None,
+    ) -> torch.Tensor:
         trans_vec = self.project(vector)
         batch, length, dim = matrix.size()
         new_vec = torch.unsqueeze(trans_vec, dim=2).expand(-1, -1, length)

@@ -30,8 +30,7 @@ file_handler.setFormatter(
 StaticLogger.addHandler(console_handler)
 StaticLogger.addHandler(file_handler)
 StaticLogger.info(
-    "Construct StatisticsLogger success, current working directory: %s, logs will be written in %s"
-    % (os.getcwd(), LOG_ROOT)
+    f"Construct StatisticsLogger success, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
 )
 
 
@@ -46,11 +45,9 @@ class Sequential_TF:
         reprs = []
         for inst in instances:
             repr = np.zeros(self.word_dim)
-            # total_len = len(inst.sequence)
             for idx in inst.sequence:
                 if idx in self.id2embed.keys():
                     repr += self.id2embed[idx]
-            # repr /= total_len
             reprs.append(repr)
         return np.asarray(reprs, dtype=np.float64)
 
@@ -60,7 +57,6 @@ class Sequential_TF:
             represents = self.transform(instances)
         else:
             StaticLogger.error(
-                "Sequential TF encoder only accepts list objects as input, got %s"
-                % type(instances)
+                f"Sequential TF encoder only accepts list objects as input, got {type(instances)}"
             )
         return represents

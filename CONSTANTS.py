@@ -28,11 +28,6 @@ SESSION = hashlib.md5(
 ).hexdigest()
 SESSION = "SESSION_" + SESSION
 
-WORD2VEC_FILE = "glove.840B.300d.txt"
-GAMMA = 2e-3
-ALPHA = 2e-3
-BETA = 4
-
 
 def GET_PROJECT_ROOT():
     # goto the root folder of LogBar

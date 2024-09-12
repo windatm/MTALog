@@ -13,12 +13,11 @@ def cut_by(train, dev, anomalous_rate=1):
         nonlocal train, dev, anomalous_rate
         dev_split = int(dev * len(instances))
         train_split = int(train * len(instances))
-        train = instances[: (train_split + dev_split)]
-        np.random.shuffle(train)
-        dev = train[train_split:]
-        train = train[:train_split]
+        train_dev = instances[: (train_split + dev_split)]
+        np.random.shuffle(train_dev)
+        dev = train_dev[train_split:]
+        train = train_dev[:train_split]
         test = instances[(train_split + dev_split) :]
-        train
         temp = []
         for ins in train:
             if ins.label == "Anomalous":

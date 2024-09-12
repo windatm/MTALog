@@ -3,6 +3,7 @@ An *attention* module that computes the similarity between
 an input vector and the rows of a matrix.
 """
 
+import math
 from typing import List, Sequence, TypeVar
 
 import torch

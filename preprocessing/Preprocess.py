@@ -14,6 +14,32 @@ from preprocessing.dataloader.OSLoader import OSLoader
 
 
 class Preprocessor:
+    _logger = logging.getLogger("Preprocessor")
+    _logger.setLevel(logging.DEBUG)
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
+        )
+    )
+    file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "Preprocessor.log"))
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
+        )
+    )
+    _logger.addHandler(console_handler)
+    _logger.addHandler(file_handler)
+    _logger.info(
+        f"Construct logger for MetaLog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
+    )
+
+    @property
+    def logger(self):
+        return Preprocessor._logger
+    
     def __init__(self):
         self.dataloader = None
         self.train_event2idx = {}
@@ -27,36 +53,6 @@ class Preprocessor:
         self.parsing = None
         self.tag2id = {"Normal": 0, "Anomalous": 1}
         self.id2tag = {0: "Normal", 1: "Anomalous"}
-        self.logger = self._set_logger()
-        pass
-
-    def _set_logger(self):
-        # Dispose Loggers.
-        PreprocessorLogger = logging.getLogger("Preprocessor")
-        PreprocessorLogger.setLevel(logging.DEBUG)
-        console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setLevel(logging.DEBUG)
-        console_handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
-            )
-        )
-
-        file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "Preprocessor.log"))
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
-            )
-        )
-
-        PreprocessorLogger.addHandler(console_handler)
-        PreprocessorLogger.addHandler(file_handler)
-        PreprocessorLogger.info(
-            "Construct PreprocessorLogger success, current working directory: %s, logs will be written in %s"
-            % (os.getcwd(), LOG_ROOT)
-        )
-        return PreprocessorLogger
 
     def process(self, dataset, parsing, template_encoding, cut_func):
         """

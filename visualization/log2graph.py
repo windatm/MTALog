@@ -5,22 +5,18 @@ import sys
 import matplotlib.pyplot as plt
 
 PATH = "logs/MetaLog.log"
-SESSION = sys.argv[1]
+session = sys.argv[1]
 
 argparser = argparse.ArgumentParser()
 
-argparser.add_argument("--source", default="HDFS", type=str, help="HDFS or BGL")
-argparser.add_argument("--target", default="BGL", type=str, help="HDFS or BGL")
 argparser.add_argument(
-    "--word2vec", default="glove.6B.300d.txt", type=str, help="GloVe file"
+    "--word2vec_file", default="glove.6B.300d.txt", type=str, help="GloVe file"
 )
 
 args, extra_args = argparser.parse_known_args()
 
-SOURCE = args.source
-TARGET = args.target
-WORD2VEC_FILE = args.word2vec
-TITLE = f"Bilateral generalization experiments transferring \nfrom {SOURCE} to {TARGET} using {WORD2VEC_FILE}"
+word2vec_file = args.word2vec_file
+TITLE = f"Bilateral generalization experiments transferring using {word2vec_file}"
 
 f1_scores = []
 train_losses = []
@@ -28,17 +24,17 @@ test_losses = []
 with open(PATH, "r") as file:
     lines = file.readlines()
     for line in lines:
-        regex = rf"^.* - MetaLog - {SESSION} - INFO: Precision = .* \/ .* = (.*), Recall = .* \/ .* = (.*) F1 score = (.*), FPR = (.*)$"
+        regex = rf"^.* - MetaLog - {session} - INFO: Test BGL: F1 score = (.*) | Precision = (.*) | Recall = (.*)$"
         match = re.search(regex, line)
 
         if match is not None:
             params = match.group().split(", ")
-            f1_score = float(params[1].split()[-1])
+            f1_score = float(params[1].split()[1])
 
             f1_scores.append(f1_score)
 
     for line in lines:
-        regex = rf"^.* - MetaLog - {SESSION} - INFO: Step:.*, Epoch:.*, meta train loss:.*, meta test loss:.*$"
+        regex = rf"^.* - MetaLog - {session} - INFO: Step:.*, Epoch:.*, meta train loss:.*, meta test loss:.*$"
         match = re.search(regex, line)
 
         if match is not None:
@@ -51,11 +47,12 @@ with open(PATH, "r") as file:
 
 
 fig, axs = plt.subplots(2, 1, figsize=(16, 8))
-num_epoches = [i for i in range(len(f1_scores))]
+REMOVE_LAST_TWO = 2  # remove the last two data points for Best model and Last model
+num_epoches = [i for i in range(len(f1_scores) - REMOVE_LAST_TWO)]
 num_validations = [i * 500 for i in range(len(train_losses))]
 
 axs[0].set_ylim(0, 100)
-axs[0].plot(num_epoches, f1_scores)
+axs[0].plot(num_epoches, f1_scores[:-REMOVE_LAST_TWO])
 axs[0].legend(["F1 Score"])
 axs[0].set_xlabel("Epoch")
 axs[0].set_ylabel("Test")
@@ -90,6 +87,12 @@ for i in range(0, len(num_validations), 2):
         ha="center",
     )
 
-fig.suptitle(TITLE)
+LAST_MODEL_INDEX = -2
+BEST_MODEL_INDEX = -1
+fig.suptitle(
+    f"{TITLE}\n"
+    + f"Last model: F1 Score = {f1_scores[LAST_MODEL_INDEX]}\n"
+    + f"Best model: F1 Score = {f1_scores[BEST_MODEL_INDEX]}"
+)
 
-fig.savefig(f"graphs/{SESSION}.png")
+fig.savefig(f"visualization/graphs/{word2vec_file}-{session}.png")

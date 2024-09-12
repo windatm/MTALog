@@ -73,7 +73,7 @@ def like_camel_to_tokens(camel_format):
     return simple_format
 
 
-def generate_inputs_and_labels(insts, label2idx):
+def generate_inputs_and_labels(insts):
     inputs = []
     labels = np.zeros(len(insts))
     for idx, inst in enumerate(insts):

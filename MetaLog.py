@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.decomposition import FastICA
 
-from CONSTANTS import ALPHA, BETA, GAMMA, LOG_ROOT, PROJECT_ROOT, SESSION, device
+from CONSTANTS import LOG_ROOT, PROJECT_ROOT, SESSION, device
 from models.gru import AttGRUModel
 from module.Common import batch_variable_inst, data_iter, generate_tinsts_binary_label
 from module.Optimizer import Optimizer
@@ -24,10 +24,18 @@ from representations.templates.statistics import (
 )
 from utils.Vocab import Vocab
 
-lstm_hiddens = 100
-num_layer = 2
+# Custom params
+lstm_hiddens = 128
+num_layer = 4
 batch_size = 100
+drop_out = 0.2
 epochs = 10
+
+word2vec_file = "glove.840B.300d.txt"
+dim = 300
+alpha = 2e-3
+beta = 4
+gamma = 2e-3
 
 
 def get_updated_network(old, new, lr, load=False):
@@ -85,23 +93,25 @@ class MetaLog:
     _logger.addHandler(console_handler)
     _logger.addHandler(file_handler)
     _logger.info(
-        "Construct logger for MetaLog succeeded, current working directory: %s, logs will be written in %s"
-        % (os.getcwd(), LOG_ROOT)
+        f"Construct logger for MetaLog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
     )
 
     @property
     def logger(self):
         return MetaLog._logger
 
-    def __init__(self, vocab, num_layer, hidden_size, label2id):
+    def __init__(self, vocab, num_layer, hidden_size, drop_out, label2id):
         self.label2id = label2id
         self.vocab = vocab
         self.num_layer = num_layer
         self.hidden_size = hidden_size
         self.batch_size = 128
         self.test_batch_size = 1024
-        self.model = AttGRUModel(vocab, self.num_layer, self.hidden_size)
-        self.bk_model = AttGRUModel(vocab, self.num_layer, self.hidden_size)
+        self.drop_out = drop_out
+        self.model = AttGRUModel(vocab, self.num_layer, self.hidden_size, self.drop_out)
+        self.bk_model = AttGRUModel(
+            vocab, self.num_layer, self.hidden_size, self.drop_out, is_backup=True
+        )
         if torch.cuda.is_available():
             self.model = self.model.cuda(device)
             self.bk_model = self.bk_model.cuda(device)
@@ -140,8 +150,8 @@ class MetaLog:
             pred_tags = tag_logits.detach().max(1)[1].cpu()
         return pred_tags, tag_logits
 
-    def evaluate(self, instances, threshold=0.5):
-        self.logger.info("Start evaluating by threshold %.3f" % threshold)
+    def evaluate(self, dataset, instances, threshold=0.5):
+        self.logger.info(f"Start evaluating {dataset} by threshold {threshold}")
         with torch.no_grad():
             self.model.eval()
             globalBatchNum = 0
@@ -171,20 +181,20 @@ class MetaLog:
                         else:
                             FN += 1
                 globalBatchNum += 1
-            self.logger.info("TP: %d, TN: %d, FN: %d, FP: %d" % (TP, TN, FN, FP))
             if TP + FP != 0:
                 precision = 100 * TP / (TP + FP)
                 recall = 100 * TP / (TP + FN)
-                f = 2 * precision * recall / (precision + recall)
-                fpr = 100 * FP / (FP + TN)
+                f1_score = 2 * precision * recall / (precision + recall)
+                # fpr = 100 * FP / (FP + TN)
                 self.logger.info(
-                    "Precision = %d / %d = %.4f, Recall = %d / %d = %.4f F1 score = %.4f, FPR = %.4f"
-                    % (TP, (TP + FP), precision, TP, (TP + FN), recall, f, fpr)
+                    f"{dataset}: F1 score = {f1_score} | Precision = {precision} | Recall = {recall})"
                 )
             else:
-                self.logger.info("Precision is 0 and therefore f is 0")
-                precision, recall, f = 0, 0, 0
-        return precision, recall, f
+                self.logger.info(
+                    f"{dataset}: F1 score = {0} | Precision = {0} | Recall = {0}"
+                )
+                precision, recall, f1_score = 0, 0, 0
+        return precision, recall, f1_score
 
 
 if __name__ == "__main__":
@@ -210,15 +220,21 @@ if __name__ == "__main__":
         "--threshold", type=float, default=0.5, help="Anomaly threshold."
     )
     argparser.add_argument(
-        "--alpha", type=float, default=ALPHA, help="learning rate for meta training"
+        "--alpha", type=float, default=alpha, help="learning rate for meta training"
     )
     argparser.add_argument(
-        "--beta", type=float, default=BETA, help="weight for meta testing"
+        "--beta", type=float, default=beta, help="weight for meta testing"
     )
     argparser.add_argument(
         "--gamma",
         type=float,
-        default=GAMMA,
+        default=gamma,
+        help="learning rate for training and testing combine",
+    )
+    argparser.add_argument(
+        "--word2vec_file",
+        type=str,
+        default=word2vec_file,
         help="learning rate for training and testing combine",
     )
 
@@ -230,12 +246,16 @@ if __name__ == "__main__":
     min_samples = args.min_samples
     reduce_dimension = args.reduce_dimension
     threshold = args.threshold
+
+    # Custom params
     alpha = args.alpha
     beta = args.beta
     gamma = args.gamma
+    word2vec_file = args.word2vec_file
 
-    # process BGL
+    # Process BGL
     dataset = "BGL"
+
     # Mark results saving directories.
     save_dir = os.path.join(PROJECT_ROOT, "outputs")
     prob_label_res_file_BGL = os.path.join(
@@ -266,7 +286,7 @@ if __name__ == "__main__":
         Template_TF_IDF_without_clean() if dataset == "NC" else Simple_template_TF_IDF()
     )
     processor_BGL = Preprocessor()
-    train_BGL, _, test_BGL = processor_BGL.process(
+    train_BGL, dev_BGL, test_BGL = processor_BGL.process(
         dataset=dataset,
         parsing=parser,
         cut_func=cut_by(0.3, 0.1, 0.01),
@@ -286,12 +306,12 @@ if __name__ == "__main__":
     transformer_BGL = None
     if reduce_dimension != -1:
         start_time = time.time()
-        print("Start FastICA, target dimension: %d" % reduce_dimension)
+        print(f"Start FastICA, target dimension: {reduce_dimension}.")
         transformer_BGL = FastICA(n_components=reduce_dimension)
         train_reprs_BGL = transformer_BGL.fit_transform(train_reprs_BGL)
         for idx, inst in enumerate(train_BGL):
             inst.repr = train_reprs_BGL[idx]
-        print("Finished at %.2f" % (time.time() - start_time))
+        print(f"Finished at {round(time.time() - start_time, 2)}.")
 
     # Probabilistic labeling.
     # Sample normal instances.
@@ -304,27 +324,6 @@ if __name__ == "__main__":
         rand_state_file=rand_state_BGL,
     )
     labeled_train_BGL = label_generator_BGL.auto_label(train_BGL, normal_ids_BGL)
-
-    # Below is used to test if the loaded result match the original clustering result.
-    TP, TN, FP, FN = 0, 0, 0, 0
-
-    for inst in labeled_train_BGL:
-        if inst.predicted == "Normal":
-            if inst.label == "Normal":
-                TN += 1
-            else:
-                FN += 1
-        else:
-            if inst.label == "Anomalous":
-                TP += 1
-            else:
-                FP += 1
-    from utils.common import get_precision_recall
-
-    print(len(normal_ids_BGL))
-    print("TP %d TN %d FP %d FN %d" % (TP, TN, FP, FN))
-    p, r, f = get_precision_recall(TP, TN, FP, FN)
-    print("%.4f, %.4f, %.4f" % (p, r, f))
 
     # Load Embeddings
     vocab_BGL = Vocab()
@@ -358,7 +357,7 @@ if __name__ == "__main__":
     train_HDFS, _, _ = processor_HDFS.process(
         dataset=dataset,
         parsing=parser,
-        cut_func=cut_by(0.4, 0.1),
+        cut_func=cut_by(0.3, 0.1),
         template_encoding=template_encoder_HDFS.present,
     )
 
@@ -372,12 +371,12 @@ if __name__ == "__main__":
     transformer_HDFS = None
     if reduce_dimension != -1:
         start_time = time.time()
-        print("Start FastICA, target dimension: %d" % reduce_dimension)
+        print(f"Start FastICA, target dimension: {reduce_dimension}.")
         transformer_HDFS = FastICA(n_components=reduce_dimension)
         train_reprs_HDFS = transformer_HDFS.fit_transform(train_reprs_HDFS)
         for idx, inst in enumerate(train_HDFS):
             inst.repr = train_reprs_HDFS[idx]
-        print("Finished at %.2f" % (time.time() - start_time))
+        print(f"Finished at {round(time.time() - start_time, 2)}.")
 
     labeled_train_HDFS = train_HDFS
 
@@ -391,10 +390,20 @@ if __name__ == "__main__":
     # Load Embeddings
     vocab_HDFS = Vocab()
     vocab_HDFS.load_from_dict(processor_HDFS.embedding)
-    print(new_embedding.keys())
     vocab.load_from_dict(new_embedding)
 
-    metalog = MetaLog(vocab, num_layer, lstm_hiddens, processor_BGL.label2id)
+    metalog = MetaLog(
+        vocab=vocab,
+        num_layer=num_layer,
+        hidden_size=lstm_hiddens,
+        drop_out=drop_out,
+        label2id=processor_BGL.label2id,
+    )
+
+    # Log custom params
+    metalog.logger.info(
+        f"Custom params: alpha = {alpha} | beta = {beta} | gamma = {gamma} | word2vec_file = {word2vec_file}."
+    )
 
     # meta learning
     log = "layer={}_hidden={}_epoch={}".format(num_layer, lstm_hiddens, epochs)
@@ -408,14 +417,13 @@ if __name__ == "__main__":
             filter(lambda p: p.requires_grad, metalog.model.parameters()), lr=gamma
         )
         global_step = 0
-        bestF = 0
+        best_f1_score = 0
         for epoch in range(epochs):
             metalog.model.train()
             metalog.bk_model.train()
             start = time.strftime("%H:%M:%S")
             metalog.logger.info(
-                "Starting epoch: %d | phase: train | start time: %s | learning rate: %s"
-                % (epoch, start, optimizer.lr)
+                f"Starting epoch: {epoch} | phase: train | start time: {start} | learning rate: {optimizer.lr}."
             )
 
             batch_num = int(np.ceil(len(labeled_train_HDFS) / float(batch_size)))
@@ -473,8 +481,7 @@ if __name__ == "__main__":
                 global_step += 1
                 if global_step % 500 == 0:
                     metalog.logger.info(
-                        "Step:%d, Epoch:%d, meta train loss:%.2f, meta test loss:%.2f"
-                        % (global_step, epoch, loss_value, loss_value_te)
+                        f"Step: {global_step} | Epoch: {epoch} | Meta-train loss: {loss_value} | Meta-test loss: {loss_value_te}."
                     )
                 if batch_iter == batch_num:
                     meta_train_loader = data_iter(labeled_train_HDFS, batch_size, True)
@@ -483,16 +490,23 @@ if __name__ == "__main__":
                     meta_test_loader = data_iter(labeled_train_BGL, batch_size, True)
                     batch_iter_test = 0
 
+            if train_BGL:
+                metalog.evaluate("Train BGL", train_BGL)
+
+            if dev_BGL:
+                metalog.evaluate("Dev BGL", dev_BGL)
+
             if test_BGL:
-                metalog.logger.info("Testing on test set.")
-                _, _, f = metalog.evaluate(test_BGL)
-                if f > bestF:
+                _, _, f1_score = metalog.evaluate("Test BGL", test_BGL)
+
+                if f1_score > best_f1_score:
                     metalog.logger.info(
-                        "Exceed best f: history = %.2f, current = %.2f" % (bestF, f)
+                        f"Exceed best F1 score: history = {best_f1_score}, current = {f1_score}."
                     )
                     torch.save(metalog.model.state_dict(), best_model_file)
-                    bestF = f
-            metalog.logger.info("Training epoch %d finished." % epoch)
+                    best_f1_score = f1_score
+
+            metalog.logger.info(f"Training epoch {epoch} finished.")
             torch.save(metalog.model.state_dict(), last_model_file)
 
     if os.path.exists(last_model_file):
@@ -503,4 +517,4 @@ if __name__ == "__main__":
         metalog.logger.info("=== Best Model ===")
         metalog.model.load_state_dict(torch.load(best_model_file))
         metalog.evaluate(test_BGL, threshold)
-    metalog.logger.info("All Finished")
+    metalog.logger.info("All Finished!")

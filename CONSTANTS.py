@@ -19,7 +19,7 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
 # Device configuration
-device = torch.device("cuda:0" if torch.cuda.is_available() else "mps:0")
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "mps:0")
 
 SESSION = hashlib.md5(
     time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() + 8 * 60 * 60)).encode(
@@ -29,7 +29,7 @@ SESSION = hashlib.md5(
 SESSION = "SESSION_" + SESSION
 
 
-def GET_PROJECT_ROOT():
+def get_project_root():
     # goto the root folder of LogBar
     current_abspath = os.path.abspath("__file__")
     while True:
@@ -41,15 +41,16 @@ def GET_PROJECT_ROOT():
     return project_root
 
 
-def GET_LOGS_ROOT():
-    log_file_root = os.path.join(GET_PROJECT_ROOT(), "logs")
+def get_logs_root():
+    log_file_root = os.path.join(get_project_root(), "logs")
     if not os.path.exists(log_file_root):
         os.makedirs(log_file_root)
     return log_file_root
 
 
-LOG_ROOT = GET_LOGS_ROOT()
-PROJECT_ROOT = GET_PROJECT_ROOT()
+LOG_ROOT = get_logs_root()
+PROJECT_ROOT = get_project_root()
+
 pretrained_mode_path = os.path.join(PROJECT_ROOT, "outputs/models/pretrain")
 if not os.path.exists(pretrained_mode_path):
     os.makedirs(pretrained_mode_path)

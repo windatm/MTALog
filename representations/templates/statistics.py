@@ -8,18 +8,14 @@ from collections import Counter
 import numpy as np
 from tqdm import tqdm
 
-from CONSTANTS import GET_LOGS_ROOT, GET_PROJECT_ROOT, LOG_ROOT, PROJECT_ROOT, SESSION
+from CONSTANTS import LOG_ROOT, PROJECT_ROOT, SESSION
 from utils.common import like_camel_to_tokens
 
 total_words = 0
 num_oov = 0
 
-PROJECT_ROOT = GET_PROJECT_ROOT()
-LOG_ROOT = GET_LOGS_ROOT()
-
-# Dispose Loggers.
-Statistics_Template_Logger = logging.getLogger("Statistics_Template_Encoder")
-Statistics_Template_Logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("Statistics_Template_Encoder")
+logger.setLevel(logging.DEBUG)
 console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setLevel(logging.DEBUG)
 console_handler.setFormatter(
@@ -36,15 +32,16 @@ file_handler.setFormatter(
     )
 )
 
-Statistics_Template_Logger.addHandler(console_handler)
-Statistics_Template_Logger.addHandler(file_handler)
-Statistics_Template_Logger.info(
-    f"Construct Statistics Template Encoder success, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+logger.info(
+    f"Construct logger for Statistics Template Encoder succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
 )
 
 
 class Simple_template_TF_IDF:
-    def __init__(self):
+    def __init__(self, word2vec_file="glove.840d.300d.txt"):
+        self.word2vec_file = word2vec_file
         self._word2vec = {}
         self.vocab_size = 0
         self.load_word2vec()
@@ -77,11 +74,8 @@ class Simple_template_TF_IDF:
                 return np.zeros(self.vocab_size)
 
     def load_word2vec(self):
-        from MetaLog import word2vec_file
-
-        load_file = word2vec_file
-        Statistics_Template_Logger.info(f"Loading word2vec dict from {load_file}.")
-        embed_file = os.path.join(PROJECT_ROOT, f"datasets/{load_file}")
+        # logger.info(f"Loading word2vec dict from {self.word2vec_file}.")
+        embed_file = os.path.join(PROJECT_ROOT, f"datasets/{self.word2vec_file}")
         if os.path.exists(embed_file):
             with open(embed_file, "r", encoding="utf-8") as reader:
                 for i, line in enumerate(tqdm(reader.readlines())):
@@ -94,17 +88,17 @@ class Simple_template_TF_IDF:
 
                         from MetaLog import dim
 
-                        if len(tokens) != (dim + 1):
-                            Statistics_Template_Logger.info(f"Line: {i}, word: {word}")
+                        # if len(tokens) != (dim + 1):
+                        #     logger.info(f"Line: {i}, word: {word}")
                     except Exception:
                         continue
-            Statistics_Template_Logger.info(
-                f"Total {len(self._word2vec)} words in {load_file} dict."
-            )
+            # logger.info(
+            #     f"Total {len(self._word2vec)} words in {self.word2vec_file} dict."
+            # )
         else:
-            Statistics_Template_Logger.error(
-                f"No pre-trained embedding file({embed_file}) found. Please check."
-            )
+            # logger.error(
+            #     f"No pre-trained embedding file({embed_file}) found. Please check."
+            # )
             exit(2)
 
     def present(self, id2templates):
@@ -135,9 +129,9 @@ class Simple_template_TF_IDF:
             # Update new processed templates
             processed_id2templates[id] = " ".join(template_tokens)
 
-        Statistics_Template_Logger.info(
-            f"Found {len(all_tokens)} tokens in {len(processed_id2templates)} log templates"
-        )
+        # logger.info(
+        #     f"Found {len(all_tokens)} tokens in {len(processed_id2templates)} log templates"
+        # )
 
         # Calculate IDF score.
         total_templates = len(processed_id2templates)
@@ -164,12 +158,13 @@ class Simple_template_TF_IDF:
                 embed = self.transform(simple_words)
                 template_emb += tf * idf * embed
             id2embed[id] = template_emb
-        Statistics_Template_Logger.info(f"OOV Rate: {(num_oov / total_words)}")
+        # logger.info(f"OOV Rate: {(num_oov / total_words)}")
         return id2embed
 
 
 class Template_TF_IDF_without_clean:
-    def __init__(self):
+    def __init__(self, word2vec_file="glove.840d.300d.txt"):
+        self.word2vec_file = word2vec_file
         self._word2vec = {}
         self.vocab_size = 0
         self.load_word2vec()
@@ -193,11 +188,8 @@ class Template_TF_IDF_without_clean:
                 return np.zeros(self.vocab_size)
 
     def load_word2vec(self):
-        from MetaLog import word2vec_file
-
-        load_file = word2vec_file
-        Statistics_Template_Logger.info("Loading word2vec dict.")
-        embed_file = os.path.join(PROJECT_ROOT, f"datasets/{load_file}")
+        # logger.info("Loading word2vec dict.")
+        embed_file = os.path.join(PROJECT_ROOT, f"datasets/{self.word2vec_file}")
         if os.path.exists(embed_file):
             with open(embed_file, "r", encoding="utf-8") as reader:
                 for line in tqdm(reader.readlines()):
@@ -211,9 +203,9 @@ class Template_TF_IDF_without_clean:
                         continue
             pass
         else:
-            Statistics_Template_Logger.error(
-                f"No pre-trained embedding file({embed_file}) found. Please check."
-            )
+            # logger.error(
+            #     f"No pre-trained embedding file({embed_file}) found. Please check."
+            # )
             exit(2)
 
     def present(self, id2templates):
@@ -224,9 +216,7 @@ class Template_TF_IDF_without_clean:
             templates.append(template)
             ids.append(id)
             all_tokens = all_tokens.union(template.split())
-        Statistics_Template_Logger.info(
-            f"Found {len(all_tokens)} tokens in {len(templates)} log templates"
-        )
+        # logger.info(f"Found {len(all_tokens)} tokens in {len(templates)} log templates")
 
         # Calculate IDF score.
         total_templates = len(templates)
@@ -255,5 +245,5 @@ class Template_TF_IDF_without_clean:
                 embed = self.transform(token)
                 template_emb += tf * idf * embed
             id2embed[id] = template_emb
-        Statistics_Template_Logger.info(f"Total {total_words} OOV {num_oov}")
+        # logger.info(f"Total {total_words} OOV {num_oov}")
         return id2embed

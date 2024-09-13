@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.decomposition import FastICA
 
-from CONSTANTS import LOG_ROOT, PROJECT_ROOT, SESSION, device
+from CONSTANTS import DEVICE, LOG_ROOT, PROJECT_ROOT, SESSION
 from models.gru import AttGRUModel
 from module.Common import batch_variable_inst, data_iter, generate_tinsts_binary_label
 from module.Optimizer import Optimizer
@@ -74,28 +74,6 @@ def put_theta(model, theta):
 
 
 class MetaLog:
-    _logger = logging.getLogger("MetaLog")
-    _logger.setLevel(logging.DEBUG)
-    console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.DEBUG)
-    console_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
-        )
-    )
-    file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "MetaLog.log"))
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
-        )
-    )
-    _logger.addHandler(console_handler)
-    _logger.addHandler(file_handler)
-    _logger.info(
-        f"Construct logger for MetaLog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
-    )
-
     def __init__(self, vocab, num_layer, hidden_size, drop_out, label2id):
         self.label2id = label2id
         self.vocab = vocab
@@ -109,11 +87,11 @@ class MetaLog:
             vocab, self.num_layer, self.hidden_size, self.drop_out, is_backup=True
         )
         if torch.cuda.is_available():
-            self.model = self.model.cuda(device)
-            self.bk_model = self.bk_model.cuda(device)
+            self.model = self.model.cuda(DEVICE)
+            self.bk_model = self.bk_model.cuda(DEVICE)
         elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-            self.model = self.model.to(device)
-            self.bk_model = self.bk_model.to(device)
+            self.model = self.model.to(DEVICE)
+            self.bk_model = self.bk_model.to(DEVICE)
         self.loss = nn.BCELoss()
 
     def forward(self, inputs, targets):
@@ -147,7 +125,7 @@ class MetaLog:
         return pred_tags, tag_logits
 
     def evaluate(self, dataset, instances, threshold=0.5):
-        self.logger.info(f"Start evaluating {dataset} by threshold {threshold}")
+        logger.info(f"Start evaluating {dataset} by threshold {threshold}")
         with torch.no_grad():
             self.model.eval()
             globalBatchNum = 0
@@ -156,9 +134,9 @@ class MetaLog:
             for onebatch in data_iter(instances, self.test_batch_size, False):
                 tinst = generate_tinsts_binary_label(onebatch, vocab_BGL, False)
                 if torch.cuda.is_available():
-                    tinst.to_cuda(device)
+                    tinst.to_cuda(DEVICE)
                 elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-                    tinst.to_mps(device)
+                    tinst.to_mps(DEVICE)
                 self.model.eval()
                 pred_tags, tag_logits = self.predict(tinst.inputs, threshold)
                 for inst, bmatch in batch_variable_inst(
@@ -182,11 +160,11 @@ class MetaLog:
                 recall = 100 * TP / (TP + FN)
                 f1_score = 2 * precision * recall / (precision + recall)
                 # fpr = 100 * FP / (FP + TN)
-                self.logger.info(
+                logger.info(
                     f"{dataset}: F1 score = {f1_score} | Precision = {precision} | Recall = {recall})"
                 )
             else:
-                self.logger.info(
+                logger.info(
                     f"{dataset}: F1 score = {0} | Precision = {0} | Recall = {0}"
                 )
                 precision, recall, f1_score = 0, 0, 0
@@ -194,6 +172,29 @@ class MetaLog:
 
 
 if __name__ == "__main__":
+    global logger
+    logger = logging.getLogger("MetaLog")
+    logger.setLevel(logging.DEBUG)
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
+        )
+    )
+    file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "MetaLog.log"))
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
+        )
+    )
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    logger.info(
+        f"Construct logger for MetaLog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
+    )
+
     argparser = argparse.ArgumentParser()
     argparser.add_argument("--mode", default="train", type=str, help="train or test")
     argparser.add_argument(
@@ -252,7 +253,7 @@ if __name__ == "__main__":
     # Process BGL
     dataset = "BGL"
 
-    # Mark results saving directories.
+    # # Mark results saving directories.
     save_dir = os.path.join(PROJECT_ROOT, "outputs")
     prob_label_res_file_BGL = os.path.join(
         save_dir,
@@ -279,7 +280,9 @@ if __name__ == "__main__":
 
     # Training, Validating and Testing instances.
     template_encoder_BGL = (
-        Template_TF_IDF_without_clean() if dataset == "NC" else Simple_template_TF_IDF()
+        Template_TF_IDF_without_clean(word2vec_file)
+        if dataset == "NC"
+        else Simple_template_TF_IDF(word2vec_file)
     )
     processor_BGL = Preprocessor()
     train_BGL, dev_BGL, test_BGL = processor_BGL.process(
@@ -347,7 +350,9 @@ if __name__ == "__main__":
 
     # Training, Validating and Testing instances.
     template_encoder_HDFS = (
-        Template_TF_IDF_without_clean() if dataset == "NC" else Simple_template_TF_IDF()
+        Template_TF_IDF_without_clean(word2vec_file)
+        if dataset == "NC"
+        else Simple_template_TF_IDF(word2vec_file)
     )
     processor_HDFS = Preprocessor()
     train_HDFS, _, _ = processor_HDFS.process(
@@ -397,7 +402,7 @@ if __name__ == "__main__":
     )
 
     # Log custom params
-    MetaLog._logger.info(
+    logger.info(
         f"Custom params: alpha = {alpha} | beta = {beta} | gamma = {gamma} | word2vec_file = {word2vec_file}."
     )
 
@@ -418,7 +423,7 @@ if __name__ == "__main__":
             metalog.model.train()
             metalog.bk_model.train()
             start = time.strftime("%H:%M:%S")
-            MetaLog._logger.info(
+            logger.info(
                 f"Starting epoch: {epoch} | phase: train | start time: {start} | learning rate: {optimizer.lr}."
             )
 
@@ -437,9 +442,9 @@ if __name__ == "__main__":
                 meta_test_batch = meta_test_loader.__next__()
                 tinst_tr = generate_tinsts_binary_label(meta_train_batch, vocab_HDFS)
                 if torch.cuda.is_available():
-                    tinst_tr.to_cuda(device)
+                    tinst_tr.to_cuda(DEVICE)
                 elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-                    tinst_tr.to_mps(device)
+                    tinst_tr.to_mps(DEVICE)
                 loss = metalog.forward(tinst_tr.inputs, tinst_tr.targets)
                 loss_value = loss.data.cpu().numpy()
                 loss.backward(retain_graph=True)
@@ -454,7 +459,7 @@ if __name__ == "__main__":
                     metalog.bk_model = (
                         get_updated_network(metalog.model, metalog.bk_model, alpha)
                         .train()
-                        .to(device)
+                        .to(DEVICE)
                     )
                 else:
                     metalog.bk_model = get_updated_network(
@@ -463,9 +468,9 @@ if __name__ == "__main__":
                 # meta test
                 tinst_test = generate_tinsts_binary_label(meta_test_batch, vocab_BGL)
                 if torch.cuda.is_available():
-                    tinst_test.to_cuda(device)
+                    tinst_test.to_cuda(DEVICE)
                 elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-                    tinst_test.to_mps(device)
+                    tinst_test.to_mps(DEVICE)
                 loss_te = beta * metalog.bk_forward(
                     tinst_test.inputs, tinst_test.targets
                 )
@@ -476,7 +481,7 @@ if __name__ == "__main__":
                 optimizer.step()
                 global_step += 1
                 if global_step % 500 == 0:
-                    MetaLog._logger.info(
+                    logger.info(
                         f"Step: {global_step} | Epoch: {epoch} | Meta-train loss: {loss_value} | Meta-test loss: {loss_value_te}."
                     )
                 if batch_iter == batch_num:
@@ -496,21 +501,21 @@ if __name__ == "__main__":
                 _, _, f1_score = metalog.evaluate("Test BGL", test_BGL)
 
                 if f1_score > best_f1_score:
-                    MetaLog._logger.info(
+                    logger.info(
                         f"Exceed best F1 score: history = {best_f1_score}, current = {f1_score}."
                     )
                     torch.save(metalog.model.state_dict(), best_model_file)
                     best_f1_score = f1_score
 
-            MetaLog._logger.info(f"Training epoch {epoch} finished.")
+            logger.info(f"Training epoch {epoch} finished.")
             torch.save(metalog.model.state_dict(), last_model_file)
 
     if os.path.exists(last_model_file):
-        MetaLog._logger.info("=== Final Model ===")
+        logger.info("=== Final Model ===")
         metalog.model.load_state_dict(torch.load(last_model_file))
         metalog.evaluate(test_BGL, threshold)
     if os.path.exists(best_model_file):
-        MetaLog._logger.info("=== Best Model ===")
+        logger.info("=== Best Model ===")
         metalog.model.load_state_dict(torch.load(best_model_file))
         metalog.evaluate(test_BGL, threshold)
-    MetaLog._logger.info("All Finished!")
+    logger.info("All Finished!")

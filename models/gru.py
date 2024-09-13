@@ -7,7 +7,7 @@ import torch.mps
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 
-from CONSTANTS import LOG_ROOT, SESSION, device
+from CONSTANTS import DEVICE, LOG_ROOT, SESSION
 from module.Attention import LinearAttention
 from module.Common import NonLinear, drop_input_independent
 from module.CPUEmbedding import CPUEmbedding
@@ -90,9 +90,9 @@ class AttGRUModel(nn.Module):
         if self.training:
             embed = drop_input_independent(embed, self.dropout)
         if torch.cuda.is_available():
-            embed = embed.cuda(device)
+            embed = embed.cuda(DEVICE)
         elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-            embed = embed.to(device)
+            embed = embed.to(DEVICE)
         batch_size = embed.size(0)
         atten_guide = torch.unsqueeze(self.atten_guide, dim=1).expand(-1, batch_size)
         atten_guide = atten_guide.transpose(1, 0)

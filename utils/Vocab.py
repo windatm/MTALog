@@ -4,13 +4,10 @@ import sys
 
 import numpy as np
 
-from CONSTANTS import GET_LOGS_ROOT, GET_PROJECT_ROOT, SESSION
+from CONSTANTS import LOG_ROOT, SESSION
 
-PROJECT_ROOT = GET_PROJECT_ROOT()
-LOG_ROOT = GET_LOGS_ROOT()
-# Dispose Loggers.
-VocabLogger = logging.getLogger("Vocab")
-VocabLogger.setLevel(logging.DEBUG)
+logger = logging.getLogger("Vocab")
+logger.setLevel(logging.DEBUG)
 console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setLevel(logging.DEBUG)
 console_handler.setFormatter(
@@ -19,7 +16,7 @@ console_handler.setFormatter(
     )
 )
 
-file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "VocabLogger.log"))
+file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "logger.log"))
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(
     logging.Formatter(
@@ -27,11 +24,10 @@ file_handler.setFormatter(
     )
 )
 
-VocabLogger.addHandler(console_handler)
-VocabLogger.addHandler(file_handler)
-VocabLogger.info(
-    "Construct VocabLogger success, current working directory: %s, logs will be written in %s"
-    % (os.getcwd(), LOG_ROOT)
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+logger.info(
+    f"Construct logger for Vocab succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
 )
 
 
@@ -48,9 +44,9 @@ class Vocab(object):
             return dict(zip(x, range(len(x))))
 
         self._tag2id = reverse(self._id2tag)
-        if len(self._tag2id) != len(self._id2tag):
-            VocabLogger.info("serious bug: output tags dumplicated, please check!")
-        VocabLogger.info("Vocab info: #output tags %d" % (self.tag_size))
+        # if len(self._tag2id) != len(self._id2tag):
+        #     logger.info("serious bug: output tags dumplicated, please check!")
+        # logger.info(f"Vocab info: #output tags {self.tag_size}")
         self._embed_dim = 0
         self.embeddings = None
 
@@ -72,8 +68,8 @@ class Vocab(object):
             self._id2word.append(word)
 
         word_num = len(self._id2word)
-        VocabLogger.info("Total words: " + str(word_num) + "\n")
-        VocabLogger.info("The dim of pretrained embeddings: %d \n" % (self._embed_dim))
+        logger.info(f"Total words: {word_num}")
+        logger.info(f"The dim of pretrained embeddings: {self._embed_dim}")
 
         def reverse(x):
             return dict(zip(x, range(len(x))))
@@ -82,7 +78,7 @@ class Vocab(object):
 
         oov_id = self._word2id.get("<oov>")
         if self.UNK != oov_id:
-            VocabLogger.info("serious bug: oov word id is not correct, please check!")
+            logger.info("serious bug: oov word id is not correct, please check!")
 
         embeddings = np.zeros((word_num, self._embed_dim))
         tem_count = 0
@@ -93,7 +89,7 @@ class Vocab(object):
             embeddings[self.UNK] += vector
             tem_count += 1
         if tem_count != word_num - 4:
-            VocabLogger.info("Goes wrong when calculating UNK emb!")
+            logger.info("Goes wrong when calculating UNK emb!")
         embeddings[self.UNK] = embeddings[self.UNK] / word_num
         self.embeddings = embeddings
 
@@ -118,8 +114,8 @@ class Vocab(object):
                         allwords.add(curword)
                         self._id2word.append(curword)
         word_num = len(self._id2word)
-        VocabLogger.info("Total words: " + str(word_num) + "\n")
-        VocabLogger.info("The dim of pretrained embeddings: %d \n" % (embedding_dim))
+        logger.info(f"Total words: {word_num}")
+        logger.info(f"The dim of pretrained embeddings: {embedding_dim}")
 
         def reverse(x):
             return dict(zip(x, range(len(x))))
@@ -127,15 +123,14 @@ class Vocab(object):
         self._word2id = reverse(self._id2word)
 
         if len(self._word2id) != len(self._id2word):
-            VocabLogger.info("serious bug: words dumplicated, please check!")
+            logger.info("serious bug: words dumplicated, please check!")
 
         oov_id = self._word2id.get("<oov>")
         if self.UNK != oov_id:
-            VocabLogger.info("serious bug: oov word id is not correct, please check!")
+            logger.info("serious bug: oov word id is not correct, please check!")
 
         embeddings = np.zeros((word_num, embedding_dim))
         with open(embfile, encoding="utf-8") as f:
-            # line = f.readline()
             tem_count = 0
             for line in f.readlines():
                 values = line.split()
@@ -146,7 +141,7 @@ class Vocab(object):
                     embeddings[self.UNK] += vector
                     tem_count += 1
         if tem_count != word_num - 4:
-            VocabLogger.info("Goes wrong when calculating UNK emb!")
+            logger.info("Goes wrong when calculating UNK emb!")
         embeddings[self.UNK] = embeddings[self.UNK] / word_num
 
     def word2id(self, xs):

@@ -111,7 +111,7 @@ class MetaLog:
         if torch.cuda.is_available():
             self.model = self.model.cuda(device)
             self.bk_model = self.bk_model.cuda(device)
-        elif torch.mps and torch.mps.is_available():
+        elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
             self.model = self.model.to(device)
             self.bk_model = self.bk_model.to(device)
         self.loss = nn.BCELoss()
@@ -157,7 +157,7 @@ class MetaLog:
                 tinst = generate_tinsts_binary_label(onebatch, vocab_BGL, False)
                 if torch.cuda.is_available():
                     tinst.to_cuda(device)
-                elif torch.mps and torch.mps.is_available():
+                elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
                     tinst.to_mps(device)
                 self.model.eval()
                 pred_tags, tag_logits = self.predict(tinst.inputs, threshold)
@@ -438,7 +438,7 @@ if __name__ == "__main__":
                 tinst_tr = generate_tinsts_binary_label(meta_train_batch, vocab_HDFS)
                 if torch.cuda.is_available():
                     tinst_tr.to_cuda(device)
-                elif torch.mps and torch.mps.is_available():
+                elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
                     tinst_tr.to_mps(device)
                 loss = metalog.forward(tinst_tr.inputs, tinst_tr.targets)
                 loss_value = loss.data.cpu().numpy()
@@ -450,7 +450,7 @@ if __name__ == "__main__":
                         .train()
                         .cuda()
                     )
-                elif torch.mps and torch.mps.is_available():
+                elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
                     metalog.bk_model = (
                         get_updated_network(metalog.model, metalog.bk_model, alpha)
                         .train()
@@ -464,7 +464,7 @@ if __name__ == "__main__":
                 tinst_test = generate_tinsts_binary_label(meta_test_batch, vocab_BGL)
                 if torch.cuda.is_available():
                     tinst_test.to_cuda(device)
-                elif torch.mps and torch.mps.is_available():
+                elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
                     tinst_test.to_mps(device)
                 loss_te = beta * metalog.bk_forward(
                     tinst_test.inputs, tinst_test.targets

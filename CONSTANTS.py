@@ -13,7 +13,7 @@ torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-elif torch.mps and torch.mps.is_available():
+elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
     torch.mps.manual_seed(seed)
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True

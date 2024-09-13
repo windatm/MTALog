@@ -91,7 +91,7 @@ class AttGRUModel(nn.Module):
             embed = drop_input_independent(embed, self.dropout)
         if torch.cuda.is_available():
             embed = embed.cuda(device)
-        elif torch.mps and torch.mps.is_available():
+        elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
             embed = embed.to(device)
         batch_size = embed.size(0)
         atten_guide = torch.unsqueeze(self.atten_guide, dim=1).expand(-1, batch_size)

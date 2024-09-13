@@ -66,7 +66,7 @@ class TInstWithoutLogits:
         )
 
     def to_mps(self, device):
-        if torch.mps and torch.mps.is_available():
+        if hasattr(torch.mps, "is_available") and torch.mps.is_available():
             self.src_words = self.src_words.to(device)
             self.src_masks = self.src_masks.to(device)
             self.tags = self.tags.to(device)

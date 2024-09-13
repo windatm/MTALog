@@ -25,16 +25,16 @@ from representations.templates.statistics import (
 from utils.Vocab import Vocab
 
 # Custom params
-lstm_hiddens = 128
+lstm_hiddens = 64
 num_layer = 4
 batch_size = 100
-drop_out = 0.2
+drop_out = 0.1
 epochs = 10
 
 word2vec_file = "glove.840B.300d.txt"
 dim = 300
 alpha = 2e-3
-beta = 4
+beta = 1
 gamma = 2e-3
 
 
@@ -95,10 +95,6 @@ class MetaLog:
     _logger.info(
         f"Construct logger for MetaLog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
     )
-
-    @property
-    def logger(self):
-        return MetaLog._logger
 
     def __init__(self, vocab, num_layer, hidden_size, drop_out, label2id):
         self.label2id = label2id
@@ -401,7 +397,7 @@ if __name__ == "__main__":
     )
 
     # Log custom params
-    metalog.logger.info(
+    MetaLog._logger.info(
         f"Custom params: alpha = {alpha} | beta = {beta} | gamma = {gamma} | word2vec_file = {word2vec_file}."
     )
 
@@ -422,7 +418,7 @@ if __name__ == "__main__":
             metalog.model.train()
             metalog.bk_model.train()
             start = time.strftime("%H:%M:%S")
-            metalog.logger.info(
+            MetaLog._logger.info(
                 f"Starting epoch: {epoch} | phase: train | start time: {start} | learning rate: {optimizer.lr}."
             )
 
@@ -480,7 +476,7 @@ if __name__ == "__main__":
                 optimizer.step()
                 global_step += 1
                 if global_step % 500 == 0:
-                    metalog.logger.info(
+                    MetaLog._logger.info(
                         f"Step: {global_step} | Epoch: {epoch} | Meta-train loss: {loss_value} | Meta-test loss: {loss_value_te}."
                     )
                 if batch_iter == batch_num:
@@ -500,21 +496,21 @@ if __name__ == "__main__":
                 _, _, f1_score = metalog.evaluate("Test BGL", test_BGL)
 
                 if f1_score > best_f1_score:
-                    metalog.logger.info(
+                    MetaLog._logger.info(
                         f"Exceed best F1 score: history = {best_f1_score}, current = {f1_score}."
                     )
                     torch.save(metalog.model.state_dict(), best_model_file)
                     best_f1_score = f1_score
 
-            metalog.logger.info(f"Training epoch {epoch} finished.")
+            MetaLog._logger.info(f"Training epoch {epoch} finished.")
             torch.save(metalog.model.state_dict(), last_model_file)
 
     if os.path.exists(last_model_file):
-        metalog.logger.info("=== Final Model ===")
+        MetaLog._logger.info("=== Final Model ===")
         metalog.model.load_state_dict(torch.load(last_model_file))
         metalog.evaluate(test_BGL, threshold)
     if os.path.exists(best_model_file):
-        metalog.logger.info("=== Best Model ===")
+        MetaLog._logger.info("=== Best Model ===")
         metalog.model.load_state_dict(torch.load(best_model_file))
         metalog.evaluate(test_BGL, threshold)
-    metalog.logger.info("All Finished!")
+    MetaLog._logger.info("All Finished!")

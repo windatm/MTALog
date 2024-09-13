@@ -84,7 +84,7 @@ class Simple_template_TF_IDF:
         embed_file = os.path.join(PROJECT_ROOT, f"datasets/{load_file}")
         if os.path.exists(embed_file):
             with open(embed_file, "r", encoding="utf-8") as reader:
-                for line in tqdm(reader.readlines()):
+                for i, line in enumerate(tqdm(reader.readlines())):
                     try:
                         tokens = line.strip().split()
                         word = tokens[0]
@@ -95,7 +95,7 @@ class Simple_template_TF_IDF:
                         from MetaLog import dim
 
                         if len(tokens) != (dim + 1):
-                            Statistics_Template_Logger.info(f"Wow: {word}")
+                            Statistics_Template_Logger.info(f"Line: {i}, word: {word}")
                     except Exception:
                         continue
             Statistics_Template_Logger.info(

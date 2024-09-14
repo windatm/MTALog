@@ -31,8 +31,8 @@ batch_size = 100
 drop_out = 0.2
 epochs = 10
 
-word2vec_file = "glove.840B.300d.txt"
-dim = 300
+word2vec_file = "glove.twitter.27B.200d.txt"
+dim = 200
 alpha = 2e-3
 beta = 2
 gamma = 2e-3
@@ -169,7 +169,7 @@ class MetaLog:
                 f1_score = 2 * precision * recall / (precision + recall)
                 # fpr = 100 * FP / (FP + TN)
                 logger.info(
-                    f"{dataset}: F1 score = {f1_score} | Precision = {precision} | Recall = {recall})"
+                    f"{dataset}: F1 score = {f1_score} | Precision = {precision} | Recall = {recall}"
                 )
             else:
                 logger.info(
@@ -521,9 +521,9 @@ if __name__ == "__main__":
     if os.path.exists(last_model_file):
         logger.info("=== Final Model ===")
         metalog.model.load_state_dict(torch.load(last_model_file))
-        metalog.evaluate("last model on Test BGL", test_BGL)
+        metalog.evaluate("Last model on Test BGL", test_BGL)
     if os.path.exists(best_model_file):
         logger.info("=== Best Model ===")
         metalog.model.load_state_dict(torch.load(best_model_file))
-        metalog.evaluate("best model on Test BGL", test_BGL)
+        metalog.evaluate("Best model on Test BGL", test_BGL)
     logger.info("All Finished!")

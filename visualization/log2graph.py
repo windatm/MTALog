@@ -7,7 +7,7 @@ STATISTICS_TEMPLATE_LOG_PATH = "logs/Statistics_Template.log"
 METALOG_LOG_PATH = "logs/MetaLog.log"
 
 session = sys.argv[1]
-word2vec_file = "glove.840d.300d.txt"
+word2vec_file = "glove.840B.300d.txt"
 
 with open(STATISTICS_TEMPLATE_LOG_PATH, "r") as file:
     lines = file.readlines()
@@ -20,7 +20,7 @@ with open(STATISTICS_TEMPLATE_LOG_PATH, "r") as file:
             word2vec_file = match.group().split()[-1]
             break
 
-TITLE = f"BILATERAL GENERALIZATION TRANSFERRING HDFS TO BGL\nusing {word2vec_file})\n"
+TITLE = f"BILATERAL GENERALIZATION TRANSFERRING HDFS TO BGL\n(using {word2vec_file})\n"
 
 train_f1_scores = []
 test_f1_scores = []
@@ -71,8 +71,8 @@ axs[0].set_ylim(0, 110)
 axs[0].plot(num_epoches, train_f1_scores, color="tab:blue")
 axs[0].plot(num_epoches, test_f1_scores, color="tab:orange")
 axs[0].legend(["Train", "Test"])
-axs[0].set_xlabel("F1 Score")
-axs[0].set_ylabel("Test")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("F1 Score")
 
 max_test_f1_score = max(test_f1_scores)
 best_test_f1_score = 0
@@ -129,9 +129,7 @@ for i in range(0, len(num_validations), 2):
     )
 
 fig.suptitle(
-    f"{TITLE}\n"
-    + f"Last model: F1 Score = {test_f1_scores[-1]}\n"
-    + f"Best model: F1 Score = {test_f1_scores[best_test_f1_score]}"
+    f"{TITLE}\n" + f"Best model F1 Score = {test_f1_scores[best_test_f1_score]}\n"
 )
 
 fig.savefig(f"visualization/graphs/{word2vec_file}-{session}.png")

@@ -30,7 +30,7 @@ with open(METALOG_LOG_PATH, "r") as file:
     lines = file.readlines()
 
     for line in lines:
-        regex = rf"^.+ - MetaLog - {session} - INFO: Dev BGL: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
+        regex = rf"^.+ - MetaLog - {session} - INFO: Train: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
         match = re.search(regex, line)
 
         if match is not None:
@@ -40,7 +40,7 @@ with open(METALOG_LOG_PATH, "r") as file:
             train_f1_scores.append(f1_score)
 
     for line in lines:
-        regex = rf"^.+ - MetaLog - {session} - INFO: Test BGL: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
+        regex = rf"^.+ - MetaLog - {session} - INFO: Test: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
         match = re.search(regex, line)
 
         if match is not None:
@@ -70,7 +70,7 @@ num_validations = [i * 500 for i in range(len(meta_train_losses))]
 axs[0].set_ylim(0, 110)
 axs[0].plot(num_epoches, train_f1_scores, color="tab:blue")
 axs[0].plot(num_epoches, test_f1_scores, color="tab:orange")
-axs[0].legend(["Train BGL", "Test BGL"])
+axs[0].legend(["Train", "Test"])
 axs[0].set_xlabel("F1 Score")
 axs[0].set_ylabel("Test")
 
@@ -131,7 +131,7 @@ for i in range(0, len(num_validations), 2):
 fig.suptitle(
     f"{TITLE}\n"
     + f"Last model: F1 Score = {test_f1_scores[-1]}\n"
-    + f"Best model: F1 Score = {test_f1_scores[best_test_f1_score]}\n"
+    + f"Best model: F1 Score = {test_f1_scores[best_test_f1_score]}"
 )
 
 fig.savefig(f"visualization/graphs/{word2vec_file}-{session}.png")

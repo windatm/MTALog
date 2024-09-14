@@ -25,14 +25,14 @@ from representations.templates.statistics import (
 from utils.Vocab import Vocab
 
 # Custom params
-lstm_hiddens = 64
+lstm_hiddens = 128
 num_layer = 4
 batch_size = 100
-drop_out = 0.2
+drop_out = 0.5
 epochs = 10
 
-word2vec_file = "glove.twitter.27B.200d.txt"
-dim = 200
+word2vec_file = "glove.42B.300d.txt"
+dim = 300
 alpha = 2e-3
 beta = 2
 gamma = 2e-3
@@ -416,11 +416,11 @@ if __name__ == "__main__":
     logger.info(
         f"Hyper-params: alpha = {alpha} | beta = {beta} | gamma = {gamma} | word2vec_file = {word2vec_file}."
     )
-
-    # meta learning
+    # Meta-learning
     log = "layer={}_hidden={}_epoch={}".format(num_layer, lstm_hiddens, epochs)
     best_model_file = os.path.join(output_model_dir, log + "_best.pt")
     last_model_file = os.path.join(output_model_dir, log + "_last.pt")
+
     if not os.path.exists(output_model_dir):
         os.makedirs(output_model_dir)
     if mode == "train":
@@ -448,7 +448,8 @@ if __name__ == "__main__":
 
             for i in range(total_bn):
                 optimizer.zero_grad()
-                # meta train
+
+                # Meta-train on HDFS and BGL
                 meta_train_batch = meta_train_loader.__next__()
                 meta_test_batch = meta_test_loader.__next__()
                 tinst_tr = generate_tinsts_binary_label(meta_train_batch, vocab_HDFS)
@@ -476,7 +477,8 @@ if __name__ == "__main__":
                     metalog.bk_model = get_updated_network(
                         metalog.model, metalog.bk_model, alpha
                     ).train()
-                # meta test
+
+                # Meta-test on BGL
                 tinst_test = generate_tinsts_binary_label(meta_test_batch, vocab_BGL)
                 if torch.cuda.is_available():
                     tinst_test.to_cuda(DEVICE)
@@ -488,7 +490,8 @@ if __name__ == "__main__":
                 loss_value_te = loss_te.data.cpu().numpy() / beta
                 loss_te.backward()
                 batch_iter_test += 1
-                # aggregate
+
+                # Aggregate the gradients and update the model.
                 optimizer.step()
                 global_step += 1
                 if global_step % 500 == 0:

@@ -20,7 +20,7 @@ with open(STATISTICS_TEMPLATE_LOG_PATH, "r") as file:
             word2vec_file = match.group().split()[-1]
             break
 
-TITLE = f"BILATERAL GENERALIZATION TRANSFERRING HDFS TO BGL USING {word2vec_file}"
+TITLE = f"BILATERAL GENERALIZATION TRANSFERRING HDFS TO BGL\nusing {word2vec_file})\n"
 
 train_f1_scores = []
 test_f1_scores = []
@@ -30,7 +30,7 @@ with open(METALOG_LOG_PATH, "r") as file:
     lines = file.readlines()
 
     for line in lines:
-        regex = rf"^.+ - MetaLog - {session} - INFO: Train: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
+        regex = rf"^.+ - MetaLog - {session} - INFO: Dev BGL: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
         match = re.search(regex, line)
 
         if match is not None:
@@ -40,7 +40,7 @@ with open(METALOG_LOG_PATH, "r") as file:
             train_f1_scores.append(f1_score)
 
     for line in lines:
-        regex = rf"^.+ - MetaLog - {session} - INFO: Test: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
+        regex = rf"^.+ - MetaLog - {session} - INFO: Test BGL: F1 score = (.+) \| Precision = (.+) \| Recall = (.+)$"
         match = re.search(regex, line)
 
         if match is not None:
@@ -131,7 +131,7 @@ for i in range(0, len(num_validations), 2):
 fig.suptitle(
     f"{TITLE}\n"
     + f"Last model: F1 Score = {test_f1_scores[-1]}\n"
-    + f"Best model: F1 Score = {test_f1_scores[best_test_f1_score]}"
+    + f"Best model: F1 Score = {test_f1_scores[best_test_f1_score]}\n"
 )
 
 fig.savefig(f"visualization/graphs/{word2vec_file}-{session}.png")

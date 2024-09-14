@@ -411,7 +411,10 @@ if __name__ == "__main__":
 
     # Log custom params
     logger.info(
-        f"Custom params: alpha = {alpha} | beta = {beta} | gamma = {gamma} | word2vec_file = {word2vec_file}."
+        f"Network params: lstm_hiddens = {lstm_hiddens} | num_layer = {num_layer} | drop_out = {drop_out}."
+    )
+    logger.info(
+        f"Hyper-params: alpha = {alpha} | beta = {beta} | gamma = {gamma} | word2vec_file = {word2vec_file}."
     )
 
     # meta learning

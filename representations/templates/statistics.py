@@ -44,6 +44,7 @@ class Simple_template_TF_IDF:
         self.word2vec_file = word2vec_file
         self._word2vec = {}
         self.vocab_size = 0
+        logger.info(f"Loading word2vec dict from {self.word2vec_file}.")
         self.load_word2vec()
 
     def not_empty(self, s):
@@ -88,17 +89,17 @@ class Simple_template_TF_IDF:
 
                         from MetaLog import dim
 
-                        # if len(tokens) != (dim + 1):
-                        #     logger.info(f"Line: {i}, word: {word}")
+                        if len(tokens) != (dim + 1):
+                            logger.info(f"Line: {i}, word: {word}")
                     except Exception:
                         continue
-            # logger.info(
-            #     f"Total {len(self._word2vec)} words in {self.word2vec_file} dict."
-            # )
+            logger.info(
+                f"Total {len(self._word2vec)} words in {self.word2vec_file} dict."
+            )
         else:
-            # logger.error(
-            #     f"No pre-trained embedding file({embed_file}) found. Please check."
-            # )
+            logger.error(
+                f"No pre-trained embedding file({embed_file}) found. Please check."
+            )
             exit(2)
 
     def present(self, id2templates):
@@ -129,9 +130,9 @@ class Simple_template_TF_IDF:
             # Update new processed templates
             processed_id2templates[id] = " ".join(template_tokens)
 
-        # logger.info(
-        #     f"Found {len(all_tokens)} tokens in {len(processed_id2templates)} log templates"
-        # )
+        logger.info(
+            f"Found {len(all_tokens)} tokens in {len(processed_id2templates)} log templates"
+        )
 
         # Calculate IDF score.
         total_templates = len(processed_id2templates)
@@ -158,7 +159,7 @@ class Simple_template_TF_IDF:
                 embed = self.transform(simple_words)
                 template_emb += tf * idf * embed
             id2embed[id] = template_emb
-        # logger.info(f"OOV Rate: {(num_oov / total_words)}")
+        logger.info(f"OOV Rate: {(num_oov / total_words)}")
         return id2embed
 
 
@@ -167,6 +168,7 @@ class Template_TF_IDF_without_clean:
         self.word2vec_file = word2vec_file
         self._word2vec = {}
         self.vocab_size = 0
+        logger.info(f"Loading word2vec dict from {self.word2vec_file}.")
         self.load_word2vec()
 
     def transform(self, words):
@@ -188,7 +190,7 @@ class Template_TF_IDF_without_clean:
                 return np.zeros(self.vocab_size)
 
     def load_word2vec(self):
-        # logger.info("Loading word2vec dict.")
+        logger.info("Loading word2vec dict.")
         embed_file = os.path.join(PROJECT_ROOT, f"datasets/{self.word2vec_file}")
         if os.path.exists(embed_file):
             with open(embed_file, "r", encoding="utf-8") as reader:
@@ -203,9 +205,9 @@ class Template_TF_IDF_without_clean:
                         continue
             pass
         else:
-            # logger.error(
-            #     f"No pre-trained embedding file({embed_file}) found. Please check."
-            # )
+            logger.error(
+                f"No pre-trained embedding file({embed_file}) found. Please check."
+            )
             exit(2)
 
     def present(self, id2templates):
@@ -245,5 +247,5 @@ class Template_TF_IDF_without_clean:
                 embed = self.transform(token)
                 template_emb += tf * idf * embed
             id2embed[id] = template_emb
-        # logger.info(f"Total {total_words} OOV {num_oov}")
+        logger.info(f"Total {total_words} OOV {num_oov}")
         return id2embed

@@ -28,14 +28,22 @@ from utils.Vocab import Vocab
 lstm_hiddens = 64
 num_layer = 4
 batch_size = 100
-drop_out = 0.1
+drop_out = 0.2
 epochs = 10
 
 word2vec_file = "glove.840B.300d.txt"
 dim = 300
 alpha = 2e-3
-beta = 1
+beta = 2
 gamma = 2e-3
+
+
+parser = "IBM"
+mode = "train"
+min_cluster_size = 100
+min_samples = 100
+reduce_dimension = 50
+threshold = 0.5
 
 
 def get_updated_network(old, new, lr, load=False):
@@ -285,10 +293,10 @@ if __name__ == "__main__":
         else Simple_template_TF_IDF(word2vec_file)
     )
     processor_BGL = Preprocessor()
-    train_BGL, dev_BGL, test_BGL = processor_BGL.process(
+    train_BGL, _, test_BGL = processor_BGL.process(
         dataset=dataset,
         parsing=parser,
-        cut_func=cut_by(0.3, 0.1, 0.01),
+        cut_func=cut_by(0.3, 0.0, 0.01),
         template_encoding=template_encoder_BGL.present,
     )
 
@@ -358,7 +366,7 @@ if __name__ == "__main__":
     train_HDFS, _, _ = processor_HDFS.process(
         dataset=dataset,
         parsing=parser,
-        cut_func=cut_by(0.3, 0.1),
+        cut_func=cut_by(0.3, 0.0),
         template_encoding=template_encoder_HDFS.present,
     )
 
@@ -492,13 +500,10 @@ if __name__ == "__main__":
                     batch_iter_test = 0
 
             if train_BGL:
-                metalog.evaluate("Train BGL", train_BGL)
-
-            if dev_BGL:
-                metalog.evaluate("Dev BGL", dev_BGL)
+                metalog.evaluate("Train", train_BGL + train_HDFS)
 
             if test_BGL:
-                _, _, f1_score = metalog.evaluate("Test BGL", test_BGL)
+                _, _, f1_score = metalog.evaluate("Test", test_BGL)
 
                 if f1_score > best_f1_score:
                     logger.info(
@@ -513,9 +518,9 @@ if __name__ == "__main__":
     if os.path.exists(last_model_file):
         logger.info("=== Final Model ===")
         metalog.model.load_state_dict(torch.load(last_model_file))
-        metalog.evaluate(test_BGL, threshold)
+        metalog.evaluate("last model on Test BGL", test_BGL)
     if os.path.exists(best_model_file):
         logger.info("=== Best Model ===")
         metalog.model.load_state_dict(torch.load(best_model_file))
-        metalog.evaluate(test_BGL, threshold)
+        metalog.evaluate("best model on Test BGL", test_BGL)
     logger.info("All Finished!")

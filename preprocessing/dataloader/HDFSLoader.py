@@ -49,7 +49,7 @@ class HDFSLoader(BasicDataLoader):
         self.blk_rex = re.compile(r"blk_[-]{0,1}[0-9]+")
         if not os.path.exists(in_file):
             self.logger.error("Input file not found, please check.")
-            exit(1)
+            sys.exit(1)
         self.in_file = in_file
         self.remove_cols = [0, 1, 2, 3, 4]
         self.dataset_base = datasets_base
@@ -139,7 +139,7 @@ class HDFSLoader(BasicDataLoader):
                                 break
                         if log_id not in self.log2temp.keys():
                             self.logger.error("Failed to parse line %s" % line)
-                            exit(2)
+                            sys.exit(2)
                     log_id += 1
 
             for block, seq in self.block2seqs.items():

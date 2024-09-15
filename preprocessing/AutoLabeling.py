@@ -71,7 +71,7 @@ class Probabilistic_Labeling:
                 self.logger.error(
                     "Random state does not match, please check or re-train."
                 )
-                exit(-1)
+                sys.exit(-1)
             labeled_inst = instances
         else:
             inputs = [inst.repr for inst in instances]
@@ -174,4 +174,4 @@ class Probabilistic_Labeling:
                     "Found mismatch block %s, please check and re-cluster if necessary"
                     % inst.id
                 )
-                exit(-1)
+                sys.exit(-1)

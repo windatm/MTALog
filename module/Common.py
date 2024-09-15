@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -67,7 +69,7 @@ def generate_tinsts_binary_label(batch_insts, vocab, if_evaluate=False):
 def batch_variable_inst(insts, tagids, tag_logits, id2tag):
     if tag_logits is None:
         print("No prediction made, please check.")
-        exit(-1)
+        sys.exit(-1)
     for inst, tagid, tag_logit in zip(insts, tagids, tag_logits):
         pred_label = id2tag[tagid]
         yield inst, pred_label == inst.label

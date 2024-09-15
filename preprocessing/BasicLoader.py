@@ -1,5 +1,6 @@
 import abc
 import os
+import sys
 import time
 from multiprocessing import Manager, Pool
 
@@ -56,7 +57,7 @@ class BasicDataLoader:
         self._restore()
         if not os.path.exists(config_file):
             self.logger.error("IBM Drain config file %s not found." % config_file)
-            exit(1)
+            sys.exit(1)
         parser = Drain3Parser(
             config_file=config_file, persistence_folder=persistence_folder
         )

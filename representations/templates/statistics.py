@@ -100,7 +100,7 @@ class Simple_template_TF_IDF:
             logger.error(
                 f"No pre-trained embedding file({embed_file}) found. Please check."
             )
-            exit(2)
+            sys.exit(2)
 
     def present(self, id2templates):
         processed_id2templates = {}
@@ -208,7 +208,7 @@ class Template_TF_IDF_without_clean:
             logger.error(
                 f"No pre-trained embedding file({embed_file}) found. Please check."
             )
-            exit(2)
+            sys.exit(2)
 
     def present(self, id2templates):
         templates = []

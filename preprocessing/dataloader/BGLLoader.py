@@ -48,7 +48,7 @@ class BGLLoader(BasicDataLoader):
 
         if not os.path.exists(in_file):
             self.logger.error("Input file not found, please check.")
-            exit(1)
+            sys.exit(1)
         self.in_file = in_file
         self.remove_cols = [0, 1, 2, 3, 4, 5, 6, 7, 8]
         self.window_size = window_size
@@ -503,7 +503,7 @@ class BGLLoader(BasicDataLoader):
                                 break
                         if log_id not in self.log2temp.keys():
                             self.logger.error("Failed to parse line %s" % line)
-                            exit(2)
+                            sys.exit(2)
                     log_id += 1
 
             with open(templates_file, "w", encoding="utf-8") as writer:

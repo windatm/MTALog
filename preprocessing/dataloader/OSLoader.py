@@ -48,7 +48,7 @@ class OSLoader(BasicDataLoader):
 
         if not os.path.exists(in_file):
             self.logger.error("Input file not found, please check.")
-            exit(1)
+            sys.exit(1)
         self.in_file = in_file
         self.ab_in_file = ab_in_file
         self.window_size = window_size

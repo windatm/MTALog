@@ -208,7 +208,7 @@ if __name__ == "__main__":
             parser.logger.error(
                 "File %s not found. Please check the dataset folder" % input_file
             )
-            exit(1)
+            sys.exit(1)
         parser.parse_file(in_file=input_file, remove_cols=remove_cols)
 
     pass

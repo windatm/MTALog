@@ -25,10 +25,10 @@ from representations.templates.statistics import (
 from utils.Vocab import Vocab
 
 # Custom params
-lstm_hiddens = 128
+lstm_hiddens = 64
 num_layer = 4
 batch_size = 100
-drop_out = 0.5
+drop_out = 0.2
 epochs = 10
 
 word2vec_file = "glove.42B.300d.txt"

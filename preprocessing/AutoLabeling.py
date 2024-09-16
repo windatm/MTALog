@@ -21,8 +21,8 @@ class Probabilistic_Labeling:
             min_cluster_size=min_clust_size, min_samples=min_samples
         )
         self.random_state_file = rand_state_file
-        # self.random_state_file = None
         self.res_file = res_file
+
         if res_file:
             folder, file = os.path.split(res_file)
             if not os.path.exists(folder):
@@ -56,7 +56,10 @@ class Probabilistic_Labeling:
 
     def auto_label(self, instances, normal_ids):
         if (
-            os.path.exists(self.res_file)
+            False
+            and self.res_file
+            and self.random_state_file
+            and os.path.exists(self.res_file)
             and os.path.exists(self.random_state_file)
             and os.path.getsize(self.res_file) != 0
         ):

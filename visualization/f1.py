@@ -132,4 +132,4 @@ fig.suptitle(
     f"{TITLE}\n" + f"Best model F1 Score = {test_f1_scores[best_test_f1_score]}\n"
 )
 
-fig.savefig(f"visualization/graphs/{word2vec_file}-{session}.png")
+fig.savefig(f"visualization/f1/{word2vec_file}-{session}.png")

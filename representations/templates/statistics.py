@@ -40,7 +40,7 @@ logger.info(
 
 
 class Simple_template_TF_IDF:
-    def __init__(self, word2vec_file="glove.840d.300d.txt"):
+    def __init__(self, word2vec_file="glove.42B.300d.txt"):
         self.word2vec_file = word2vec_file
         self._word2vec = {}
         self.vocab_size = 0
@@ -57,25 +57,33 @@ class Simple_template_TF_IDF:
             for word in words:
                 total_words += 1
                 word = word.lower()
-                # word = re.sub('[·’!"$%&\'()＃！（）*+,-./:;<=>?，：￥★、…．＞【】［］《》？“”‘\[\\]^_`{|}~]+', '', word)
+                word = re.sub(
+                    "[·’!\"$%&'()＃！（）*+,-./:;<=>?，：￥★、…．＞【】［］《》？“”‘\[\\]^_`{|}~]+",
+                    "",
+                    word,
+                )
                 if word in self._word2vec.keys():
                     return_list.append(self._word2vec[word])
                 else:
-                    print(word, end=" ")
+                    logger.warning(f"OOV: {word}")
                     num_oov += 1
             return np.asarray(return_list, dtype=float).sum(axis=0) / len(words)
         else:
             total_words += 1
             word = words.lower()
-            # word = re.sub('[·’!"$%&\'()＃！（）*+,-./:;<=>?，：￥★、…．＞【】［］《》？“”‘\[\\]^_`{|}~]+', '', word)
+            word = re.sub(
+                "[·’!\"$%&'()＃！（）*+,-./:;<=>?，：￥★、…．＞【】［］《》？“”‘\[\\]^_`{|}~]+",
+                "",
+                word,
+            )
             if word in self._word2vec.keys():
                 return self._word2vec[word]
             else:
+                logger.warning(f"OOV: {word}")
                 num_oov += 1
                 return np.zeros(self.vocab_size)
 
     def load_word2vec(self):
-        # logger.info(f"Loading word2vec dict from {self.word2vec_file}.")
         embed_file = os.path.join(PROJECT_ROOT, f"datasets/{self.word2vec_file}")
         if os.path.exists(embed_file):
             with open(embed_file, "r", encoding="utf-8") as reader:
@@ -90,7 +98,7 @@ class Simple_template_TF_IDF:
                         from MetaLog import dim
 
                         if len(tokens) != (dim + 1):
-                            logger.info(f"Line: {i}, word: {word}")
+                            logger.warning(f"Line: {i}, word: {word}")
                     except Exception:
                         continue
             logger.info(
@@ -111,7 +119,8 @@ class Simple_template_TF_IDF:
         id2embed = {}
         for id, template in id2templates.items():
             # Preprocess: split by spaces and special characters.
-            template_tokens = re.split(r"[,\!:=\[\]\(\)\$\s\.\/\#\|\\ ]", template)
+            logger.debug(f"id2template: {id}: {template}")
+            template_tokens = re.split(r"[,\!:=\[\]\(\)\$\s\.\/\#\|\\\'\` ]", template)
             filtered_tokens = []
             for simplified_token in template_tokens:
                 if re.match("[\_]+", simplified_token) is not None:
@@ -180,6 +189,7 @@ class Template_TF_IDF_without_clean:
                 if word in self._word2vec.keys():
                     return_list.append(self._word2vec[word])
                 else:
+                    logger.warning(f"OOV: {word}")
                     num_oov += 1
                     return_list.append([np.zeros(self.vocab_size)])
             return return_list
@@ -218,7 +228,6 @@ class Template_TF_IDF_without_clean:
             templates.append(template)
             ids.append(id)
             all_tokens = all_tokens.union(template.split())
-        # logger.info(f"Found {len(all_tokens)} tokens in {len(templates)} log templates")
 
         # Calculate IDF score.
         total_templates = len(templates)

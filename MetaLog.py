@@ -24,26 +24,44 @@ from representations.templates.statistics import (
 )
 from utils.Vocab import Vocab
 
-# Custom params
-lstm_hiddens = 64
-num_layer = 4
-batch_size = 100
-drop_out = 0.2
-epochs = 10
-
-word2vec_file = "glove.42B.300d.txt"
+# Define the word2vec file and its dimensions
+word2vec_file = "glove.840B.300d.txt"
 dim = 300
-alpha = 2e-3
-beta = 2
-gamma = 2e-3
 
+# Set the hyperparameters
+alpha = 0.001  # Learning rate for meta-train
+beta = 1  # Scaling factor for meta-test loss
+gamma = 0.002  # Learning rate for optimizer
+# LSTM hidden units
+lstm_hiddens = 64
 
+# Number of layers in the network
+num_layer = 3
+
+# Batch size for training
+batch_size = 100
+
+# Dropout rate
+drop_out = 0.3
+
+# Number of training epochs
+epochs = 5
+
+# Threshold for prediction
+threshold = 0.5
+
+# Define the parser type
 parser = "IBM"
+
+# Set the mode to 'train'
 mode = "train"
+
+# Parameters for clustering
 min_cluster_size = 100
 min_samples = 100
-reduce_dimension = 50
-threshold = 0.5
+
+# Dimension reduction target
+reduce_dimensions = 50
 
 
 def get_updated_network(old, new, lr, load=False):
@@ -494,7 +512,7 @@ if __name__ == "__main__":
                 # Aggregate the gradients and update the model.
                 optimizer.step()
                 global_step += 1
-                if global_step % 500 == 0:
+                if global_step % 10 == 0:
                     logger.info(
                         f"Step: {global_step} | Epoch: {epoch} | Meta-train loss: {loss_value} | Meta-test loss: {loss_value_te}."
                     )

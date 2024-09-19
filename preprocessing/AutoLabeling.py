@@ -56,8 +56,7 @@ class Probabilistic_Labeling:
 
     def auto_label(self, instances, normal_ids):
         if (
-            False
-            and self.res_file
+            self.res_file
             and self.random_state_file
             and os.path.exists(self.res_file)
             and os.path.exists(self.random_state_file)

@@ -8,5 +8,5 @@
 **/*.log
 datasets/*
 outputs/*
-visualization/loss/*
-visualization/f1/*
+visualization/graphs/*
+visualization/old-format/*

@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+
 import matplotlib.pyplot as plt
 
 # Constants
@@ -10,6 +11,7 @@ LOSS_EPS = 0.05
 
 # Get session from command line arguments
 session = sys.argv[1]
+
 
 def extract_word2vec_file(log_path, session):
     """Extract the word2vec file path from the statistics template log."""
@@ -21,26 +23,18 @@ def extract_word2vec_file(log_path, session):
                 return match.group(1)
     return None
 
+
 def extract_meta_log_data(log_path, session):
     """Extract losses, parameters, and F1 scores from MetaLog."""
     meta_train_losses, meta_test_losses = [], []
     train_f1_scores, test_f1_scores = [], []
-    params = {
-        "lstm_hiddens": None,
-        "num_layer": None,
-        "drop_out": None,
-        "alpha": None,
-        "beta": None,
-        "gamma": None
-    }
+    params = {"lstm_hiddens": None, "num_layer": None, "drop_out": None, "lr": None}
 
     patterns = {
         "lstm_hiddens": rf"^.* - MetaLog - {session} - INFO:   - LSTM hidden units: (.+)$",
         "num_layer": rf"^.* - MetaLog - {session} - INFO:   - Number of layers: (.+)$",
         "drop_out": rf"^.* - MetaLog - {session} - INFO:   - Dropout rate: (.+)$",
-        "alpha": rf"^.* - MetaLog - {session} - INFO:   - Alpha: (.+)$",
-        "beta": rf"^.* - MetaLog - {session} - INFO:   - Beta: (.+)$",
-        "gamma": rf"^.* - MetaLog - {session} - INFO:   - Gamma: (.+)$",
+        "lr": rf"^.* - MetaLog - {session} - INFO:   - Learning rate: (.+)$",
         "loss": rf"^.* - MetaLog - {session} - INFO: Step: .+ \| Epoch: .+ \| Meta-train loss: (.+) \| Meta-test loss: (.+)\.$",
         "train": rf"^.+ - MetaLog - {session} - INFO: Train: F1 score = (.+) \| Precision = .+ \| Recall = .+$",
         "test": rf"^.+ - MetaLog - {session} - INFO: Test: F1 score = (.+) \| Precision = .+ \| Recall = .+$",
@@ -61,6 +55,7 @@ def extract_meta_log_data(log_path, session):
 
     return meta_train_losses, meta_test_losses, train_f1_scores, test_f1_scores, params
 
+
 def plot_f1_scores(ax, num_epochs, train_f1, test_f1):
     """Plot train and test F1 scores on the provided axis."""
     ax.set_ylim(0, 110)
@@ -74,6 +69,7 @@ def plot_f1_scores(ax, num_epochs, train_f1, test_f1):
         ax.text(num_epochs[i], train + 5, round(train, 2), ha="center")
         ax.text(num_epochs[i], test - 10, round(test, 2), ha="center")
 
+
 def plot_meta_losses(ax, num_steps, meta_train_losses, meta_test_losses):
     """Plot meta-train and meta-test losses on the provided axis."""
     ax.plot(num_steps, meta_train_losses, color="tab:blue", label="Meta-train loss")
@@ -82,12 +78,15 @@ def plot_meta_losses(ax, num_steps, meta_train_losses, meta_test_losses):
     ax.set_xlabel("Step")
     ax.set_ylabel("Loss")
 
+
 # Main execution
 if __name__ == "__main__":
     word2vec_file = extract_word2vec_file(STATISTICS_TEMPLATE_LOG_PATH, session)
     title = f"BILATERAL GENERALIZATION TRANSFERRING HDFS TO BGL USING {word2vec_file}"
 
-    meta_train_losses, meta_test_losses, train_f1_scores, test_f1_scores, params = extract_meta_log_data(METALOG_LOG_PATH, session)
+    meta_train_losses, meta_test_losses, train_f1_scores, test_f1_scores, params = (
+        extract_meta_log_data(METALOG_LOG_PATH, session)
+    )
 
     fig, axs = plt.subplots(2, 1, figsize=(16, 8))
     num_epochs = list(range(len(train_f1_scores)))
@@ -101,7 +100,7 @@ if __name__ == "__main__":
     fig_title = (
         f"{title}\nBest model F1 Score = {best_test_f1_score}\n"
         f"LSTM hidden units = {params['lstm_hiddens']} | Layers = {params['num_layer']} | "
-        f"Drop out = {params['drop_out']} | Alpha = {params['alpha']} | Beta = {params['beta']} | Gamma = {params['gamma']}"
+        f"Drop out = {params['drop_out']} | Learning rate = {params['lr']}"
     )
     fig.suptitle(fig_title)
 

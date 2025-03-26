@@ -39,7 +39,7 @@ class Preprocessor:
     @property
     def logger(self):
         return Preprocessor._logger
-    
+
     def __init__(self):
         self.dataloader = None
         self.train_event2idx = {}
@@ -93,17 +93,6 @@ class Preprocessor:
                 semantic_repr_func=template_encoding,
             )
             parser_config = os.path.join(PROJECT_ROOT, "conf/BGL.ini")
-        elif dataset == "OpenStack":
-            dataloader = OSLoader(
-                in_file=os.path.join(
-                    PROJECT_ROOT, "datasets/OpenStack/openstack_normal1.log"
-                ),
-                ab_in_file=os.path.join(
-                    PROJECT_ROOT, "datasets/OpenStack/openstack_abnormal.log"
-                ),
-                semantic_repr_func=template_encoding,
-            )
-            parser_config = os.path.join(PROJECT_ROOT, "conf/OpenStack.ini")
 
         self.dataloader = dataloader
 

@@ -136,22 +136,23 @@ class Probabilistic_Labeling:
                 % (precision, recall, f)
             )
             self.record_label_res(labeled_inst)
-            with open(self.random_state_file, "wb") as writer:
-                state = random.getstate()
-                pickle.dump(state, writer)
+            # with open(self.random_state_file, "wb") as writer:
+            #     state = random.getstate()
+            #     pickle.dump(state, writer)
         return labeled_inst
 
     def record_label_res(self, instances):
-        with open(self.res_file, "w", encoding="utf-8") as writer:
-            for inst in instances:
-                writer.write(
-                    str(inst.id)
-                    + " "
-                    + str(inst.predicted)
-                    + " "
-                    + str(inst.confidence)
-                    + "\n"
-                )
+        # with open(self.res_file, "w", encoding="utf-8") as writer:
+        #     for inst in instances:
+        #         writer.write(
+        #             str(inst.id)
+        #             + " "
+        #             + str(inst.predicted)
+        #             + " "
+        #             + str(inst.confidence)
+        #             + "\n"
+        #         )
+        pass
 
     def load_label_res(self, instances):
         self.logger.info(

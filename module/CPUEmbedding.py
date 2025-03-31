@@ -1,6 +1,8 @@
-from CONSTANTS import *
+import torch
+import torch.nn.functional as F
 
 from torch.nn.parameter import Parameter
+import torch.nn as nn
 
 
 class CPUEmbedding(nn.Module):
@@ -51,12 +53,21 @@ class CPUEmbedding(nn.Module):
         print('Always in cpu')
         return self.cpu()
 
+    def mps(self, device=None):
+        print('Always in cpu')
+        return self.cpu()
+
     def forward(self, input):
         if input.is_cuda:
             device = input.get_device()
             input = input.cpu()
             output = F.embedding(input, self.weight, self.padding_idx)
             return output.cuda(device)
+        elif input.is_mps:
+            device = input.get_device()
+            input = input.to(device)
+            output = F.embedding(input, self.weight, self.padding_idx)
+            return output.to(device)
         else:
             try:
                 output = F.embedding(input, self.weight, self.padding_idx)

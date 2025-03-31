@@ -1,2 +1,12 @@
-/venv
-/datasets
+**/.DS_Store
+**/__MACOSX
+
+**/*.pyc
+**/__pycache__
+**/.venv
+
+**/*.log
+datasets/*
+outputs/*
+visualization/graphs/*
+visualization/old-format/*

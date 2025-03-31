@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 # Constants
 STATISTICS_TEMPLATE_LOG_PATH = "logs/Statistics_Template.log"
-METALOG_LOG_PATH = "logs/MetaLog.log"
+MTALOG_LOG_PATH = "logs/MTALog.log"
 LOSS_EPS = 0.05
 
 # Get session from command line arguments
@@ -25,19 +25,19 @@ def extract_word2vec_file(log_path, session):
 
 
 def extract_meta_log_data(log_path, session):
-    """Extract losses, parameters, and F1 scores from MetaLog."""
+    """Extract losses, parameters, and F1 scores from MTALog."""
     meta_train_losses, meta_test_losses = [], []
     train_f1_scores, test_f1_scores = [], []
     params = {"lstm_hiddens": None, "num_layer": None, "drop_out": None, "lr": None}
 
     patterns = {
-        "lstm_hiddens": rf"^.* - MetaLog - {session} - INFO:   - LSTM hidden units: (.+)$",
-        "num_layer": rf"^.* - MetaLog - {session} - INFO:   - Number of layers: (.+)$",
-        "drop_out": rf"^.* - MetaLog - {session} - INFO:   - Dropout rate: (.+)$",
-        "lr": rf"^.* - MetaLog - {session} - INFO:   - Learning rate: (.+)$",
-        "loss": rf"^.* - MetaLog - {session} - INFO: Step: .+ \| Epoch: .+ \| Meta-train loss: (.+) \| Meta-test loss: (.+)\.$",
-        "train": rf"^.+ - MetaLog - {session} - INFO: Train: F1 score = (.+) \| Precision = .+ \| Recall = .+$",
-        "test": rf"^.+ - MetaLog - {session} - INFO: Test: F1 score = (.+) \| Precision = .+ \| Recall = .+$",
+        "lstm_hiddens": rf"^.* - MTALog - {session} - INFO:   - LSTM hidden units: (.+)$",
+        "num_layer": rf"^.* - MTALog - {session} - INFO:   - Number of layers: (.+)$",
+        "drop_out": rf"^.* - MTALog - {session} - INFO:   - Dropout rate: (.+)$",
+        "lr": rf"^.* - MTALog - {session} - INFO:   - Learning rate: (.+)$",
+        "loss": rf"^.* - MTALog - {session} - INFO: Step: .+ \| Epoch: .+ \| Meta-train loss: (.+) \| Meta-test loss: (.+)\.$",
+        "train": rf"^.+ - MTALog - {session} - INFO: Train: F1 score = (.+) \| Precision = .+ \| Recall = .+$",
+        "test": rf"^.+ - MTALog - {session} - INFO: Test: F1 score = (.+) \| Precision = .+ \| Recall = .+$",
     }
 
     with open(log_path, "r") as file:
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     title = f"BILATERAL GENERALIZATION TRANSFERRING HDFS TO BGL USING {word2vec_file}"
 
     meta_train_losses, meta_test_losses, train_f1_scores, test_f1_scores, params = (
-        extract_meta_log_data(METALOG_LOG_PATH, session)
+        extract_meta_log_data(MTALOG_LOG_PATH, session)
     )
 
     fig, axs = plt.subplots(2, 1, figsize=(16, 8))

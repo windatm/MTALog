@@ -10,12 +10,11 @@ Jinja2==3.1.4
 joblib==1.4.2
 jsonpickle==1.5.1
 kiwisolver==1.4.7
-logging==0.4.9.6
 MarkupSafe==2.1.5
 matplotlib==3.9.2
 mpmath==1.3.0
 networkx==3.3
-numpy==2.1.1
+numpy==1.24.4
 overrides==7.7.0
 packaging==24.1
 pillow==10.4.0
@@ -26,8 +25,8 @@ scipy==1.14.1
 six==1.16.0
 sympy==1.13.1
 threadpoolctl==3.5.0
-torch==2.5.0.dev20240907
-torchaudio==2.5.0.dev20240907
-torchvision==0.20.0.dev20240907
+torch==2.2.2
+torchaudio==2.2.2
+torchvision==0.17.2
 tqdm==4.66.5
 typing_extensions==4.12.2

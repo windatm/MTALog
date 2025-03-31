@@ -33,7 +33,7 @@ def get_project_root():
     # goto the root folder of LogBar
     current_abspath = os.path.abspath("__file__")
     while True:
-        if os.path.split(current_abspath)[1] == "MetaLog":
+        if os.path.split(current_abspath)[1] == "MTALog":
             project_root = current_abspath
             break
         else:

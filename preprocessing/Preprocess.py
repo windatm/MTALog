@@ -33,7 +33,7 @@ class Preprocessor:
     _logger.addHandler(console_handler)
     _logger.addHandler(file_handler)
     _logger.info(
-        f"Construct logger for MetaLog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
+        f"Construct logger for MTALog succeeded, current working directory: {os.getcwd()}, logs will be written in {LOG_ROOT}"
     )
 
     @property

@@ -32,10 +32,35 @@ logger.info(
 
 
 class Vocab(object):
+    """
+    A vocabulary manager that handles token-to-ID mapping, tag encoding, and embedding construction.
+
+    This class supports:
+        - Preloading pretrained embeddings from file or dictionary.
+        - Token and tag indexing.
+        - Handling of special tokens: <pad>, <bos>, <eos>, <oov>.
+        - Construction of an embedding matrix with averaged OOV vector.
+
+    Attributes:
+        PAD (int): Padding index (always 0).
+        START (int): Start-of-sequence token index.
+        END (int): End-of-sequence token index.
+        UNK (int): Unknown token (OOV) index.
+        embeddings (np.ndarray): Embedding matrix aligned with word IDs.
+        _word2id (dict): Mapping from word string to integer ID.
+        _id2word (list): Reverse mapping from ID to word.
+        _tag2id (dict): Mapping from tag label to ID.
+        _id2tag (list): Reverse mapping from ID to tag label.
+        _embed_dim (int): Embedding vector dimensionality.
+    """
     # please always set PAD to zero, otherwise will cause a bug in pad filling (Tensor)
     PAD, START, END, UNK = 0, 1, 2, 3
 
     def __init__(self):
+        """
+        Initialize the vocabulary with fixed tag mappings ("Normal", "Anomalous").
+        Special tokens (<pad>, <bos>, <eos>, <oov>) are also reserved.
+        """
         self._id2tag = []
         self._id2tag.append("Normal")
         self._id2tag.append("Anomalous")
@@ -52,9 +77,14 @@ class Vocab(object):
 
     def load_from_dict(self, id2embed):
         """
-        Load word embeddings from the results of preprocessor.
-        :param id2embed:
-        :return:
+        Load embeddings from a dictionary mapping word tokens to embedding vectors.
+
+        Args:
+            id2embed (dict): Mapping from word → embedding (np.ndarray).
+
+        Notes:
+            - Special tokens are inserted at the beginning.
+            - Averages all seen embeddings to initialize the UNK (OOV) vector.
         """
         self._id2word = []
         all_words = set()
@@ -94,6 +124,19 @@ class Vocab(object):
         self.embeddings = embeddings
 
     def load_pretrained_embs(self, embfile):
+        """
+        Load embeddings from a file formatted as:
+            <vocab_size> <embedding_dim>
+            word1 val1 val2 ...
+            word2 val1 val2 ...
+
+        Args:
+            embfile (str): Path to the pretrained embedding file.
+
+        Notes:
+            - Inserts special tokens before reading from file.
+            - Computes average UNK embedding from all vectors.
+        """
         embedding_dim = -1
         self._id2word = []
         allwords = set()
@@ -145,33 +188,87 @@ class Vocab(object):
         embeddings[self.UNK] = embeddings[self.UNK] / word_num
 
     def word2id(self, xs):
+        """
+        Convert word(s) to ID(s). Returns UNK index if word not found.
+
+        Args:
+            xs (str or List[str]): Word or list of words.
+
+        Returns:
+            int or List[int]: Corresponding ID(s).
+        """
         if isinstance(xs, list):
             return [self._word2id.get(x, self.UNK) for x in xs]
         return self._word2id.get(xs, self.UNK)
 
     def id2word(self, xs):
+        """
+        Convert ID(s) back to word(s).
+
+        Args:
+            xs (int or List[int]): ID or list of IDs.
+
+        Returns:
+            str or List[str]: Corresponding word(s).
+        """
         if isinstance(xs, list):
             return [self._id2word[x] for x in xs]
         return self._id2word[xs]
 
     def tag2id(self, xs):
+        """
+        Convert tag label(s) to ID(s). Supports "Normal", "Anomalous".
+
+        Args:
+            xs (str or List[str]): Tag or list of tags.
+
+        Returns:
+            int or List[int]: Corresponding ID(s).
+        """
         if isinstance(xs, list):
             return [self._tag2id.get(x) for x in xs]
         return self._tag2id.get(xs)
 
     def id2tag(self, xs):
+        """
+        Convert tag ID(s) back to label(s).
+
+        Args:
+            xs (int or List[int]): Tag ID(s).
+
+        Returns:
+            str or List[str]: Corresponding tag(s).
+        """
         if isinstance(xs, list):
             return [self._id2tag[x] for x in xs]
         return self._id2tag[xs]
 
     @property
     def vocab_size(self):
+        """
+        Return the total number of unique words in the vocabulary.
+
+        Returns:
+            int: Size of vocabulary.
+        """
         return len(self._id2word)
 
     @property
     def tag_size(self):
+        """
+        Return the number of unique output tags (e.g., 2 for binary classification).
+
+        Returns:
+            int: Number of tag classes.
+        """
         return len(self._id2tag)
 
     @property
     def word_dim(self):
+        """
+        Return the dimensionality of the embedding vectors.
+
+        Returns:
+            int: Embedding size.
+        """
         return self._embed_dim

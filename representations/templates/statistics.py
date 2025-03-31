@@ -35,7 +35,30 @@ logger.info(
 
 
 class Template_TF_IDF_without_clean:
+    """
+    Computes semantic vector representations of log templates using a combination of:
+        - Pretrained word embeddings (e.g., Word2Vec),
+        - Term Frequency-Inverse Document Frequency (TF-IDF) weighting.
+
+    This encoder treats each template as a small "document" and creates a weighted sum of
+    word embeddings based on their importance within the corpus of templates.
+
+    Attributes:
+        word2vec_file (str): File path to pretrained word embeddings.
+        _word2vec (dict): Dictionary mapping tokens to their embedding vectors.
+        vocab_size (int): Dimensionality of the word embeddings.
+        total_words (set): Tokens encountered in current run.
+        num_oov (set): Out-of-vocabulary tokens in current run.
+        total_words_all (set): All tokens encountered historically.
+        num_oov_all (set): All OOV tokens encountered historically.
+    """
     def __init__(self, word2vec_file):
+        """
+        Initialize the encoder by loading pretrained word vectors.
+
+        Args:
+            word2vec_file (str): Relative path to the word embedding file within the dataset folder.
+        """
         self.total_words_all = set()
         self.num_oov_all = set()
         self.total_words = set()
@@ -47,6 +70,15 @@ class Template_TF_IDF_without_clean:
         self._load_word2vec()
 
     def transform(self, words):
+        """
+        Retrieve the vector(s) for a word or list of words from the embedding dictionary.
+
+        Args:
+            words (str or List[str]): A single token or a list of tokens.
+
+        Returns:
+            np.ndarray or List[np.ndarray]: Corresponding embedding(s), or zero vector(s) if OOV.
+        """
         if isinstance(words, list):
             return_list = []
             for word in words:
@@ -75,6 +107,17 @@ class Template_TF_IDF_without_clean:
                 return np.zeros(self.vocab_size)
 
     def _load_word2vec(self):
+        """
+        Load pretrained word embeddings from file into a dictionary.
+
+        Expected file format:
+            Each line contains a word followed by its embedding values (space-separated).
+
+        Logs:
+            - Number of embeddings loaded.
+            - Embedding dimension.
+            - Errors if the file is missing or malformed.
+        """
         logger.info("Loading word2vec dict.")
         embed_file = os.path.join(PROJECT_ROOT, f"datasets/{self.word2vec_file}")
         if os.path.exists(embed_file):
@@ -96,6 +139,15 @@ class Template_TF_IDF_without_clean:
             sys.exit(2)
 
     def present(self, id2templates):
+        """
+        Generate TF-IDF-weighted embeddings for each log template.
+
+        Args:
+            id2templates (dict): Mapping from template ID to its raw template string.
+
+        Returns:
+            dict: Mapping from template ID to its TF-IDF-weighted embedding vector.
+        """
         templates = []
         ids = []
         all_tokens = set()

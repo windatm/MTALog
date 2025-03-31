@@ -14,9 +14,33 @@ from utils.common import get_precision_recall
 
 
 class Probabilistic_Labeling:
+    """
+    Performs unsupervised probabilistic labeling of log instances using Solitary-HDBSCAN clustering.
+
+    The algorithm:
+        - Learns dense representations of logs.
+        - Clusters them via HDBSCAN.
+        - Assigns binary labels (Normal / Anomalous) to each instance with a confidence score.
+        - Optionally loads/saves previous results to avoid recomputation.
+
+    Attributes:
+        model (Solitary_HDBSCAN): Clustering model with anomaly score estimation.
+        random_state_file (str): Optional path to cached RNG state for reproducibility.
+        res_file (str): Optional path to cached clustering/labeling results.
+        logger (logging.Logger): Logger for reporting labeling status and performance.
+    """
     def __init__(
         self, min_samples, min_clust_size, res_file=None, rand_state_file=None
     ):
+        """
+        Initialize the clustering-based labeling system.
+
+        Args:
+            min_samples (int): Minimum number of samples per cluster (HDBSCAN hyperparameter).
+            min_clust_size (int): Minimum cluster size.
+            res_file (str, optional): Path to save/load clustering results.
+            rand_state_file (str, optional): Path to save/load Python random state.
+        """
         self.model = Solitary_HDBSCAN(
             min_cluster_size=min_clust_size, min_samples=min_samples
         )
@@ -55,6 +79,16 @@ class Probabilistic_Labeling:
         self.logger = ProbLabelLogger
 
     def auto_label(self, instances, normal_ids):
+        """
+        Automatically assign labels and confidence scores to a batch of instances using clustering.
+
+        Args:
+            instances (List[Instance]): Input data instances with representations.
+            normal_ids (List[int]): Indices of instances that are known to be normal.
+
+        Returns:
+            List[Instance]: Instances with `predicted` and `confidence` attributes set.
+        """
         if (
             self.res_file
             and self.random_state_file
@@ -142,6 +176,15 @@ class Probabilistic_Labeling:
         return labeled_inst
 
     def record_label_res(self, instances):
+        """
+        Save clustering results to file for future reuse.
+
+        Args:
+            instances (List[Instance]): List of labeled instances.
+
+        Note:
+            Currently inactive (commented out). Can be enabled for caching.
+        """
         # with open(self.res_file, "w", encoding="utf-8") as writer:
         #     for inst in instances:
         #         writer.write(
@@ -155,6 +198,15 @@ class Probabilistic_Labeling:
         pass
 
     def load_label_res(self, instances):
+        """
+        Load previously saved labels and confidence scores from a file.
+
+        Args:
+            instances (List[Instance]): Input instances to assign loaded labels.
+
+        Raises:
+            SystemExit: If a mismatch between saved and current instances is detected.
+        """
         self.logger.info(
             "Start load previous clustered results from %s" % self.res_file
         )

@@ -9,6 +9,16 @@ from entities.TensorInstances import TInstWithLogits
 
 
 def batch_slice(data, batch_size):
+    """
+    Slice the input data into smaller batches of specified size.
+
+    Args:
+        data (list): A list of data instances (e.g., log sequences).
+        batch_size (int): Number of instances per batch.
+
+    Yields:
+        list: A batch containing up to 'batch_size' instances.
+    """
     batch_num = int(np.ceil(len(data) / float(batch_size)))
     for i in range(batch_num):
         cur_batch_size = batch_size if i < batch_num - 1 else len(data) - batch_size * i
@@ -17,17 +27,48 @@ def batch_slice(data, batch_size):
 
 
 def insts_numberize(insts, vocab):
+    """
+    Convert a list of data instances into numerical (ID-based) form using a vocabulary.
+
+    Args:
+        insts (list): List of raw data instances.
+        vocab (Vocabulary): A vocabulary object with word2id and tag2id mappings.
+
+    Yields:
+        tuple: A tuple (srcids, tagid, inst) representing word IDs, label ID, and the original instance.
+    """
     for inst in insts:
         yield inst2id(inst, vocab)
 
 
 def inst2id(inst, vocab):
+    """
+    Convert a single instance into numeric ID representation.
+
+    Args:
+        inst (Instance): A data instance containing source events and label.
+        vocab (Vocabulary): Vocabulary object mapping tokens and tags to IDs.
+
+    Returns:
+        tuple: (srcids, tagid, inst) – source token IDs, tag ID, and original instance.
+    """
     srcids = vocab.word2id(inst.src_events)
     tagid = vocab.tag2id(inst.tag)
     return srcids, tagid, inst
 
 
 def data_iter(data, batch_size, shuffle=True):
+    """
+    Create an iterator over data batches with optional shuffling.
+
+    Args:
+        data (list): List of input instances.
+        batch_size (int): Number of instances per batch.
+        shuffle (bool): Whether to shuffle the data and batches.
+
+    Yields:
+        list: A batch of instances.
+    """
     batched_data = []
     if shuffle:
         np.random.shuffle(data)
@@ -39,6 +80,18 @@ def data_iter(data, batch_size, shuffle=True):
 
 
 def generate_tinsts_binary_label(batch_insts, vocab, if_evaluate=False):
+    """
+    Generate tensor-based batch data for binary classification tasks.
+
+    Args:
+        batch_insts (list): List of input instances.
+        vocab (Vocabulary): Vocabulary object with word2id and tag2id mappings.
+        if_evaluate (bool): Flag for evaluation mode (not used internally).
+
+    Returns:
+        TInstWithLogits: A structured tensor containing inputs, masks, lengths, and label targets.
+    """
+
     slen = len(batch_insts[0].sequence)
     batch_size = len(batch_insts)
     for b in range(1, batch_size):
@@ -67,6 +120,18 @@ def generate_tinsts_binary_label(batch_insts, vocab, if_evaluate=False):
 
 
 def batch_variable_inst(insts, tagids, tag_logits, id2tag):
+    """
+    Match model predictions with ground truth labels for evaluation.
+
+    Args:
+        insts (list): List of original instances.
+        tagids (list): Predicted tag IDs.
+        tag_logits (tensor): Prediction scores.
+        id2tag (dict): Mapping from tag IDs back to tag strings.
+
+    Yields:
+        tuple: (instance, prediction_correct) – a boolean flag indicating correctness.
+    """
     if tag_logits is None:
         print("No prediction made, please check.")
         sys.exit(-1)
@@ -76,12 +141,30 @@ def batch_variable_inst(insts, tagids, tag_logits, id2tag):
 
 
 def tensor_2_np(t):
+    """
+    Convert a PyTorch tensor to a NumPy array.
+
+    Args:
+        t (torch.Tensor): Input tensor.
+
+    Returns:
+        np.ndarray: Tensor converted to NumPy format.
+    """
     return t.detach().cpu().numpy()
 
 
 def orthonormal_initializer(output_size, input_size):
     """
-    adopted from Timothy Dozat https://github.com/tdozat/Parser/blob/master/lib/linalg.py
+    Generate an orthonormal matrix for weight initialization using iterative optimization.
+
+    This function is adapted from Timothy Dozat's parser implementation.
+
+    Args:
+        output_size (int): Number of output units.
+        input_size (int): Number of input features.
+
+    Returns:
+        np.ndarray: A transposed orthonormal matrix of shape [output_size, input_size].
     """
     print(output_size, input_size)
     I = np.eye(output_size)
@@ -122,6 +205,16 @@ def orthonormal_initializer(output_size, input_size):
 
 
 def drop_input_independent(word_embeddings, dropout_emb):
+    """
+    Apply independent dropout noise to word embeddings.
+
+    Args:
+        word_embeddings (Tensor): Tensor of shape [batch_size, seq_len, emb_dim].
+        dropout_emb (float): Dropout probability.
+
+    Returns:
+        Tensor: Word embeddings with dropout applied independently per element.
+    """
     batch_size, seq_length, _ = word_embeddings.size()
     word_masks = word_embeddings.data.new(batch_size, seq_length).fill_(1 - dropout_emb)
     word_masks = Variable(torch.bernoulli(word_masks), requires_grad=False)
@@ -134,6 +227,17 @@ def drop_input_independent(word_embeddings, dropout_emb):
 
 
 def drop_sequence_sharedmask(inputs, dropout, batch_first=True):
+    """
+    Apply dropout with a shared mask across all time steps in a sequence.
+
+    Args:
+        inputs (Tensor): Input tensor of shape [seq_len, batch_size, hidden_size] or [batch_size, seq_len, hidden_size].
+        dropout (float): Dropout probability.
+        batch_first (bool): Whether the input format is batch-first.
+
+    Returns:
+        Tensor: Input tensor with shared-mask dropout applied.
+    """
     if batch_first:
         inputs = inputs.transpose(0, 1)
     seq_length, batch_size, hidden_size = inputs.size()
@@ -149,6 +253,22 @@ def drop_sequence_sharedmask(inputs, dropout, batch_first=True):
 
 
 class NonLinear(nn.Module):
+    """
+    A neural module that applies a linear transformation followed by an optional activation function.
+
+    This module is useful as a lightweight feedforward layer that can be inserted after recurrent,
+    attention, or convolutional blocks to project feature representations into a desired space
+    (e.g., logits or embedding space).
+
+    Args:
+        input_size (int): Dimensionality of the input features.
+        hidden_size (int): Dimensionality of the output (projected) features.
+        activation (callable, optional): A callable activation function (e.g., torch.relu). 
+                                         If None, no activation is applied (i.e., identity function).
+
+    Raises:
+        ValueError: If the provided activation is not callable.
+    """
     def __init__(self, input_size, hidden_size, activation=None):
         super(NonLinear, self).__init__()
         self.input_size = input_size
@@ -166,10 +286,25 @@ class NonLinear(nn.Module):
         self.reset_parameters()
 
     def forward(self, x):
+        """
+        Forward pass through the linear layer followed by activation.
+
+        Args:
+            x (Tensor): Input tensor of shape [*, input_size].
+
+        Returns:
+            Tensor: Output tensor of shape [*, hidden_size] after linear + activation.
+        """
         y = self.linear(x)
         return self._activate(y)
 
     def reset_parameters(self):
+        """
+        Initialize the weights using an orthonormal initializer and set biases to zero.
+
+        Orthonormal initialization improves training stability, especially in recurrent and deep models.
+        """
+
         W = orthonormal_initializer(self.hidden_size, self.input_size)
         self.linear.weight.data.copy_(torch.from_numpy(W))
 
@@ -178,6 +313,29 @@ class NonLinear(nn.Module):
 
 
 class Biaffine(nn.Module):
+    """
+    Implements a biaffine transformation layer between two input tensors.
+
+    This module is commonly used in structured prediction tasks, such as dependency parsing
+    or relation extraction, where pairwise interactions between token representations are modeled.
+
+    The computation can be summarized as:
+        score(i, j) = x_i^T W y_j + U x_i + V y_j + b
+    where W is a 3D tensor, and the other terms are optional biases depending on the `bias` argument.
+
+    Args:
+        in1_features (int): Dimensionality of the first input tensor (input1).
+        in2_features (int): Dimensionality of the second input tensor (input2).
+        out_features (int): Number of output channels (typically number of relation types or scores).
+        bias (tuple): A pair of booleans indicating whether to append a bias term (i.e., a constant '1')
+                      to input1 and/or input2.
+
+    Example:
+        input1: [batch_size, len1, in1_features]
+        input2: [batch_size, len2, in2_features]
+        output: [batch_size, len2, len1, out_features]
+    """
+
     def __init__(self, in1_features, in2_features, out_features, bias=(True, True)):
         super(Biaffine, self).__init__()
         self.in1_features = in1_features
@@ -195,12 +353,29 @@ class Biaffine(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
+        """
+        Initializes the weight matrix of the internal linear layer with zeros.
+
+        Note:
+            A more expressive model could use random or orthogonal initialization instead.
+        """
         W = np.zeros(
             (self.linear_output_size, self.linear_input_size), dtype=np.float32
         )
         self.linear.weight.data.copy_(torch.from_numpy(W))
 
     def forward(self, input1, input2):
+        """
+        Performs a biaffine transformation between two input tensors.
+
+        Args:
+            input1 (Tensor): Tensor of shape [batch_size, len1, in1_features]
+            input2 (Tensor): Tensor of shape [batch_size, len2, in2_features]
+
+        Returns:
+            Tensor: Output of shape [batch_size, len2, len1, out_features]
+                    representing biaffine scores between elements in input1 and input2.
+        """
         batch_size, len1, dim1 = input1.size()
         batch_size, len2, dim2 = input2.size()
         if self.bias[0]:

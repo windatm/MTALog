@@ -13,13 +13,16 @@ torch.manual_seed(seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-    torch.mps.manual_seed(seed)
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
 # Device configuration
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "mps:0")
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda:0")
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")
 
 SESSION = hashlib.md5(
     time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() + 8 * 60 * 60)).encode(
@@ -27,6 +30,7 @@ SESSION = hashlib.md5(
     )
 ).hexdigest()
 SESSION = "SESSION_" + SESSION
+MARGIN = 1.0  # distance margin between abnormal and prototype
 
 
 def get_project_root():

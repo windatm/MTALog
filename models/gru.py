@@ -3,7 +3,6 @@ import os
 import sys
 
 import torch
-import torch.mps
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 
@@ -11,6 +10,7 @@ from CONSTANTS import DEVICE, LOG_ROOT, SESSION
 from module.Attention import LinearAttention
 from module.Common import NonLinear, drop_input_independent
 from module.CPUEmbedding import CPUEmbedding
+from models.decoder import MLPDecoder
 
 class AttGRUModel(nn.Module): 
     """
@@ -84,7 +84,8 @@ class AttGRUModel(nn.Module):
         self.word_embed.weight.data.copy_(torch.from_numpy(vocab.embeddings))
         # Freezes the embedding weights
         self.word_embed.weight.requires_grad = False
-
+        self.word_embed = self.word_embed.to(DEVICE)
+        
         if not is_backup:
             self.logger.info("==== Model Parameters ====")
             self.logger.info(f"Input Dimension: {word_dims}")
@@ -110,6 +111,8 @@ class AttGRUModel(nn.Module):
             tensor_1_dim=self.sent_dim, tensor_2_dim=self.sent_dim
         )
         self.proj = NonLinear(self.sent_dim, 2)
+        # Add decoder for reconstruction loss
+        self.decoder = MLPDecoder(input_dim=self.sent_dim, output_dim=self.sent_dim)
 
     def reset_word_embed_weight(self, vocab, pretrained_embedding):
         """
@@ -147,10 +150,8 @@ class AttGRUModel(nn.Module):
         embed = self.word_embed(words)
         if self.training:
             embed = drop_input_independent(embed, self.dropout)
-        if torch.cuda.is_available():
-            embed = embed.cuda(DEVICE)
-        elif hasattr(torch.mps, "is_available") and torch.mps.is_available():
-            embed = embed.to(DEVICE)
+
+        embed = embed.to(DEVICE)
         batch_size = embed.size(0)
         # Learnable vector used as a query to compute attention over the GRU outputs.
         atten_guide = torch.unsqueeze(self.atten_guide, dim=1).expand(-1, batch_size)
@@ -165,6 +166,9 @@ class AttGRUModel(nn.Module):
         # Multiplies attention weights with GRU outputs → weighted sum.
         # Produces one vector per sequence, shape [batch_size, sent_dim].
         represents = hiddens * sent_probs
-        represents = represents.sum(dim=1)
-        outputs = self.proj(represents)
-        return outputs  # , represents
+        represents = represents.sum(dim=1) # latent z
+
+        logits = self.proj(represents)
+        recon = self.decoder(represents)
+
+        return logits, recon, represents

@@ -53,7 +53,7 @@ class CPUEmbedding(nn.Module):
         print('Always in cpu')
         return self.cpu()
 
-    def mps(self, device=None):
+    def cpu(self, device=None):
         print('Always in cpu')
         return self.cpu()
 
@@ -63,7 +63,7 @@ class CPUEmbedding(nn.Module):
             input = input.cpu()
             output = F.embedding(input, self.weight, self.padding_idx)
             return output.cuda(device)
-        elif input.is_mps:
+        elif input.is_cpu:
             device = input.get_device()
             input = input.to(device)
             output = F.embedding(input, self.weight, self.padding_idx)

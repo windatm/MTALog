@@ -25,7 +25,7 @@ class Preprocessor:
         - Load raw log data and labels
         - Parse log lines into structured event templates
         - Apply semantic encoding (via template_embedding function)
-        - Split dataset into train/dev/test using a custom strategy
+        - Split dataset into train/val/test using a custom strategy
         - Write processed data to disk and update internal dictionaries
 
     Attributes:
@@ -81,7 +81,7 @@ class Preprocessor:
         self.tag2id = {"Normal": 0, "Anomalous": 1}
         self.id2tag = {0: "Normal", 1: "Anomalous"}
 
-    def process(self, dataset, parsing, template_encoding, cut_func):
+    def process(self, dataset, parsing, template_encoding, cut_func, target_mode=False):
         """
         Main preprocessing pipeline for a given dataset and parser.
 
@@ -89,10 +89,10 @@ class Preprocessor:
             dataset (str): Dataset name (e.g., 'HDFS', 'BGL', 'BGLSample').
             parsing (str): Log parsing method (currently supports only 'IBM' → Drain).
             template_encoding (function): Semantic encoder function that maps event templates to vectors.
-            cut_func (function): A callable to split the instance list into train/dev/test sets.
+            cut_func (function): A callable to split the instance list into train/val/test sets.
 
         Returns:
-            tuple: (train, dev, test), each a list of Instance objects.
+            tuple: (train, val, test), each a list of Instance objects.
         """
 
         self.base = os.path.join(
@@ -123,6 +123,17 @@ class Preprocessor:
                 semantic_repr_func=template_encoding,
             )
             parser_config = os.path.join(PROJECT_ROOT, "conf/BGL.ini")
+        elif dataset == "OS":
+            dataloader = OSLoader(
+                in_file=os.path.join(PROJECT_ROOT, "datasets/OpenStack/openstack_normal1.log"),
+                ab_in_file=os.path.join(
+                    PROJECT_ROOT, "datasets/OpenStack/openstack_abnormal.log"
+                ),
+                dataset_base=os.path.join(PROJECT_ROOT, "datasets/OpenStack"),
+                semantic_repr_func=template_encoding,
+            )
+            parser_config = os.path.join(PROJECT_ROOT, "conf/OS.ini")
+
 
         self.dataloader = dataloader
 
@@ -133,18 +144,18 @@ class Preprocessor:
         else:
             self.logger.error("Parsing method %s not implemented yet.")
             raise NotImplementedError
-        return self._gen_instances(cut_func=cut_func)
+        return self._gen_instances(cut_func=cut_func, target_mode=target_mode)
 
-    def _gen_instances(self, cut_func=None):
+    def _gen_instances(self, cut_func=None, target_mode=False):
         """
         Internal function to convert raw parsed log blocks into Instance objects, apply cut strategy,
         and save intermediate results.
 
         Args:
-            cut_func (callable): Function to split the data into train/dev/test.
+            cut_func (callable): Function to split the data into train/val/test.
 
         Returns:
-            tuple: (train, dev, test) lists of Instance objects.
+            tuple: (train, val, test) lists of Instance objects.
         """
         self.logger.info(
             "Start preprocessing dataset %s by parsing method %s"
@@ -154,7 +165,7 @@ class Preprocessor:
         if not os.path.exists(self.base):
             os.makedirs(self.base)
         train_file = os.path.join(self.base, "train")
-        dev_file = os.path.join(self.base, "dev")
+        val_file = os.path.join(self.base, "val")
         test_file = os.path.join(self.base, "test")
 
         self.logger.info("Start generating instances.")
@@ -170,16 +181,24 @@ class Preprocessor:
                 instances.append(inst)
             else:
                 self.logger.error("Found mismatch block: %s. Please check." % block)
-        self.embedding = self.dataloader.id2embed
 
-        train, dev, test = cut_func(instances)
-        self.label_distribution(train, dev, test)
-        self.record_files(train, train_file, dev, dev_file, test, test_file)
+        train, val, test = cut_func(instances)
+
+        if target_mode:
+            valid_ids = set(inst.id for inst in train)
+            self.embedding = {
+                eid: emb for eid, emb in self.dataloader.id2embed.items() if eid in valid_ids
+            }
+        else:
+            self.embedding = self.dataloader.id2embed
+
+        self.label_distribution(train, val, test)
+        self.record_files(train, train_file, val, val_file, test, test_file)
         self.update_dicts()
         self.update_event2idx_mapping(train, test)
         del self.dataloader
         gc.collect()
-        return train, dev, test
+        return train, val, test
 
     def update_dicts(self):
         """
@@ -190,16 +209,16 @@ class Preprocessor:
         self.templates = self.dataloader.templates
 
     def record_files(
-        self, train, train_file, dev, dev_file, test, test_file, pretrain_source=None
+        self, train, train_file, val, val_file, test, test_file, pretrain_source=None
     ):
         """
-        Write processed train/dev/test instances to disk as `.txt` files.
+        Write processed train/val/test instances to disk as `.txt` files.
 
         Args:
             train (list): Training instances.
             train_file (str): Path to write training data.
-            dev (list): Dev instances (can be None).
-            dev_file (str): Path to write dev data.
+            val (list): Dev instances (can be None).
+            val_file (str): Path to write val data.
             test (list): Test instances.
             test_file (str): Path to write test data.
             pretrain_source (str, optional): If specified, also saves only token sequences for pretraining.
@@ -207,9 +226,9 @@ class Preprocessor:
         with open(train_file, "w", encoding="utf-8") as writer:
             for instance in train:
                 writer.write(str(instance) + "\n")
-        if dev:
-            with open(dev_file, "w", encoding="utf-8") as writer:
-                for instance in dev:
+        if val:
+            with open(val_file, "w", encoding="utf-8") as writer:
+                for instance in val:
                     writer.write(str(instance) + "\n")
         with open(test_file, "w", encoding="utf-8") as writer:
             for instance in test:
@@ -219,22 +238,22 @@ class Preprocessor:
                 for inst in train:
                     writer.write(" ".join([str(x) for x in inst.sequence]) + "\n")
 
-    def label_distribution(self, train, dev, test):
+    def label_distribution(self, train, val, test):
         """
         Logs the distribution of labels (Normal / Anomalous) in each dataset split.
 
         Args:
             train (list): Training set.
-            dev (list): Dev set.
+            val (list): Dev set.
             test (list): Test set.
         """
         train_label_counter = Counter([inst.label for inst in train])
-        if dev:
-            dev_label_counter = Counter([inst.label for inst in dev])
+        if val:
+            val_label_counter = Counter([inst.label for inst in val])
             self.logger.info(
                 "Dev: %d Normal, %d Anomalous instances.",
-                dev_label_counter["Normal"],
-                dev_label_counter["Anomalous"],
+                val_label_counter["Normal"],
+                val_label_counter["Anomalous"],
             )
         test_label_counter = Counter([inst.label for inst in test])
         self.logger.info(
@@ -253,7 +272,7 @@ class Preprocessor:
         Build index mappings for unique event IDs in training and test data for use in event count vectors.
 
         Args:
-            pre (list): Pre-training instances (usually train + dev).
+            pre (list): Pre-training instances (usually train + val).
             post (list): Post-training instances (usually test).
         """
         self.logger.info("Update train instances' event-idx mapping.")

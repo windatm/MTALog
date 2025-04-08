@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from sklearn.metrics import precision_recall_fscore_support
 
 
@@ -88,3 +89,23 @@ def generate_inputs_and_labels(insts):
 
         labels[idx] = label
     return inputs, labels
+
+def get_model_and_result_paths(parser: str, project_root: str) -> tuple[str, str]:
+    """
+    Generate absolute paths for:
+        - Trained model checkpoint,
+        - Prediction results.
+
+    Args:
+        parser (str): Parser name (e.g., "IBM").
+        project_root (str): Root directory of the project.
+
+    Returns:
+        tuple[str, str]: 
+            - output_model_dir: Directory for trained model checkpoints.
+            - output_res_dir: Directory for model prediction results.
+    """
+    output_model_dir = os.path.join(project_root, "outputs", "models", "MTALog", parser, "model")
+    output_res_dir = os.path.join(project_root, "outputs", "results", "MTALog", parser, "detect_res")
+    
+    return output_model_dir, output_res_dir

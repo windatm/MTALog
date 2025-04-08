@@ -15,9 +15,9 @@ class MLPDecoder(nn.Module):
     def __init__(self, input_dim: int, output_dim: int):
         super(MLPDecoder, self).__init__()
         self.decoder = nn.Sequential(
-            nn.Linear(input_dim, input_dim // 2),
+            nn.Linear(input_dim, input_dim * 2),
             nn.ReLU(),
-            nn.Linear(input_dim // 2, output_dim)
+            nn.Linear(input_dim * 2, output_dim)
         )
 
     def forward(self, z):

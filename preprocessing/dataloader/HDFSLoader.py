@@ -7,7 +7,6 @@ import sys
 from tqdm import tqdm
 
 from CONSTANTS import LOG_ROOT, PROJECT_ROOT, SESSION
-from parsers.Drain_IBM import Drain3Parser
 from preprocessing.BasicLoader import BasicDataLoader
 
 

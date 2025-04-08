@@ -79,7 +79,7 @@ def data_iter(data, batch_size, shuffle=True):
         yield batch
 
 
-def generate_tinsts_binary_label(batch_insts, vocab, if_evaluate=False):
+def generate_tinsts_binary_label(batch_insts, vocab):
     """
     Generate tensor-based batch data for binary classification tasks.
 

@@ -10,7 +10,7 @@ from CONSTANTS import LOG_ROOT, PROJECT_ROOT, SESSION
 from entities.instances import Instance
 from preprocessing.dataloader.BGLLoader import BGLLoader
 from preprocessing.dataloader.HDFSLoader import HDFSLoader
-from preprocessing.dataloader.OSLoader import OSLoader
+from preprocessing.dataloader.OpenStackLoader import OpenStackLoader
 
 
 class Preprocessor:
@@ -43,14 +43,17 @@ class Preprocessor:
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(
         logging.Formatter(
-            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
+            "%(asctime)s - %(name)s - " + SESSION +
+            " - %(levelname)s: %(message)s"
         )
     )
-    file_handler = logging.FileHandler(os.path.join(LOG_ROOT, "Preprocessor.log"))
+    file_handler = logging.FileHandler(
+        os.path.join(LOG_ROOT, "Preprocessor.log"))
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(
         logging.Formatter(
-            "%(asctime)s - %(name)s - " + SESSION + " - %(levelname)s: %(message)s"
+            "%(asctime)s - %(name)s - " + SESSION +
+            " - %(levelname)s: %(message)s"
         )
     )
     _logger.addHandler(console_handler)
@@ -123,17 +126,17 @@ class Preprocessor:
                 semantic_repr_func=template_encoding,
             )
             parser_config = os.path.join(PROJECT_ROOT, "conf/BGL.ini")
-        elif dataset == "OS":
-            dataloader = OSLoader(
-                in_file=os.path.join(PROJECT_ROOT, "datasets/OpenStack/openstack_normal1.log"),
+        elif dataset == "OpenStack":
+            dataloader = OpenStackLoader(
+                in_file=os.path.join(
+                    PROJECT_ROOT, "datasets/OpenStack/openstack_normal1.log"),
                 ab_in_file=os.path.join(
                     PROJECT_ROOT, "datasets/OpenStack/openstack_abnormal.log"
                 ),
                 dataset_base=os.path.join(PROJECT_ROOT, "datasets/OpenStack"),
                 semantic_repr_func=template_encoding,
             )
-            parser_config = os.path.join(PROJECT_ROOT, "conf/OS.ini")
-
+            parser_config = os.path.join(PROJECT_ROOT, "conf/OpenStack.ini")
 
         self.dataloader = dataloader
 
@@ -180,7 +183,8 @@ class Preprocessor:
                 inst = Instance(id, self.dataloader.block2eventseq[id], label)
                 instances.append(inst)
             else:
-                self.logger.error("Found mismatch block: %s. Please check." % block)
+                self.logger.error(
+                    "Found mismatch block: %s. Please check." % block)
 
         train, val, test = cut_func(instances)
 
@@ -236,7 +240,8 @@ class Preprocessor:
         if pretrain_source:
             with open(pretrain_source, "w", encoding="utf-8") as writer:
                 for inst in train:
-                    writer.write(" ".join([str(x) for x in inst.sequence]) + "\n")
+                    writer.write(" ".join([str(x)
+                                 for x in inst.sequence]) + "\n")
 
     def label_distribution(self, train, val, test):
         """

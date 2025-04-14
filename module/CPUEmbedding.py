@@ -60,7 +60,7 @@ class CPUEmbedding(nn.Module):
     def forward(self, input):
         if input.is_cuda:
             device = input.get_device()
-            input = input.cpu()
+            input = input.to(device)  # cpu()
             output = F.embedding(input, self.weight, self.padding_idx)
             return output.cuda(device)
         elif input.is_cpu:

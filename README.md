@@ -59,3 +59,7 @@ regex
 
 - Run `approaches/MTALog.py` (make sure it has proper parameters) for bilateral generalization from HDFS to BGL.
 - Run `approaches/MTALog_BH.py` (make sure it has proper parameters) for bilateral generalization from BGL to HDFS.
+
+conda create -n mtalog_env python=3.11 
+conda activate mtalog_env
+pip install -r requirements.txts

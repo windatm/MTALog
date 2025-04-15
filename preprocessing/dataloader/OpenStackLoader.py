@@ -32,8 +32,10 @@ class OpenStackLoader(BasicDataLoader):
             )
         )
 
-        file_handler = logging.FileHandler(
-            os.path.join(LOG_ROOT, "OpenStackLoader.log"))
+        log_file_path = os.path.join(LOG_ROOT, "OpenStackLoader.log")
+        os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+        file_handler = logging.FileHandler(log_file_path)
+        
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(
             logging.Formatter(

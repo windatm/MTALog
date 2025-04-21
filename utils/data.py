@@ -192,12 +192,12 @@ def encode_log_sequences_with_gru(model, vocab, instances, batch_size=128, show_
                     logger.info(f"Latent shape: {latent.shape}")
                     
                     # Normalize latent vectors
-                latent = F.normalize(latent, p=2, dim=1)
+                    latent = F.normalize(latent, p=2, dim=1)
 
                     # Update instance representations
-                for i, inst in enumerate(batch):
-                    inst.repr = latent[i].detach().cpu().numpy()
-                    encoded_instances.append(inst)
+                    for i, inst in enumerate(batch):
+                        inst.repr = latent[i].detach().cpu().numpy()
+                        encoded_instances.append(inst)
                         success_count += 1
                         
                 except Exception as e:
@@ -221,7 +221,6 @@ def encode_log_sequences_with_gru(model, vocab, instances, batch_size=128, show_
 
     logger.info(f"Encoding complete: {success_count}/{len(instances)} instances successfully encoded")
     return encoded_instances
-
 
 
 def find_most_similar_template(instance, source_encoders, similarity_threshold=0.8):
@@ -256,38 +255,38 @@ def find_most_similar_template(instance, source_encoders, similarity_threshold=0
         return None
     
     try:
-    best_similarity = 0
-    best_repr = None
-    
-    for system, encoder in source_encoders.items():
+        best_similarity = 0
+        best_repr = None
+        
+        for system, encoder in source_encoders.items():
             if encoder is None:
                 logger.warning(f"Encoder for system {system} is None. Skipping.")
                 continue
                 
             if not hasattr(encoder, "repr_lookup") or not encoder.repr_lookup:
                 logger.warning(f"No repr_lookup found for encoder {system}. Skipping.")
-            continue
-            
-        for seq_key, repr in encoder.repr_lookup.items():
+                continue
+                
+            for seq_key, repr in encoder.repr_lookup.items():
                 # Skip empty sequences
                 if not seq_key:
                     continue
                     
-            # Calculate sequence similarity (simple Jaccard similarity for now)
+                # Calculate sequence similarity (simple Jaccard similarity for now)
                 try:
-            target_set = set(instance.sequence)
-            source_set = set(seq_key)
-                    
+                    target_set = set(instance.sequence)
+                    source_set = set(seq_key)
+                        
                     # Avoid division by zero
                     union_size = len(target_set.union(source_set))
                     if union_size == 0:
                         continue
                         
                     similarity = len(target_set.intersection(source_set)) / union_size
-            
-            if similarity > best_similarity and similarity >= similarity_threshold:
-                best_similarity = similarity
-                best_repr = repr
+                
+                    if similarity > best_similarity and similarity >= similarity_threshold:
+                        best_similarity = similarity
+                        best_repr = repr
                 except Exception as e:
                     logger.warning(f"Error calculating similarity: {str(e)}. Skipping this template.")
                     continue
@@ -295,7 +294,7 @@ def find_most_similar_template(instance, source_encoders, similarity_threshold=0
         if best_repr is not None:
             logger.debug(f"Found similar template with similarity {best_similarity:.2f}")
                 
-    return best_repr
+        return best_repr
         
     except Exception as e:
         logger.error(f"Error in find_most_similar_template: {str(e)}")

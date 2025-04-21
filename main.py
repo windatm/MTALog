@@ -191,6 +191,10 @@ def process_source_systems(params, logger, template_encoder):
                     encoder = encoder_cache['encoder']
                     support_set = encoder_cache['support_set']
                     query_set = encoder_cache['query_set']
+                    
+                    # Restore vocab if it was saved
+                    if 'vocab' in encoder_cache and not hasattr(encoder, 'vocab'):
+                        encoder.vocab = encoder_cache['vocab']
                 
                 # Validate data exists (less strict)
                 if train_data and hasattr(processor, 'embedding') and vocab:
@@ -293,21 +297,32 @@ def process_source_systems(params, logger, template_encoder):
                 tuple(inst.sequence): inst.repr for inst in encoded_data
             }
             
-            # Temporarily store repr_lookup
-            repr_lookup = encoder.repr_lookup
-            encoder.repr_lookup = {}  # Empty dict for pickling
+            # Temporarily store attributes that can't be pickled
+            repr_lookup = {}
+            vocab_backup = None
+            
+            if hasattr(encoder, 'repr_lookup'):
+                repr_lookup = encoder.repr_lookup
+                encoder.repr_lookup = {}  # Empty dict for pickling
+                
+            if hasattr(encoder, 'vocab'):
+                vocab_backup = encoder.vocab
+                delattr(encoder, 'vocab')  # Remove for pickling
             
             # Save encoder and encoded data to cache
             encoder_cache = {
                 'encoder': encoder,
                 'support_set': support_set,
-                'query_set': query_set
+                'query_set': query_set,
+                'vocab': vocab_backup  # Store vocab in cache
             }
             with open(encoder_cache_file, 'wb') as f:
                 pickle.dump(encoder_cache, f)
                 
-            # Restore repr_lookup
+            # Restore attributes
             encoder.repr_lookup = repr_lookup
+            if vocab_backup is not None:
+                encoder.vocab = vocab_backup
         
         # Store processed data
         source_processors[source_system] = processor
@@ -386,6 +401,10 @@ def process_target_system(params, logger, template_encoder, source_data):
                 support_set = encoder_cache['support_set']
                 query_set = encoder_cache['query_set']
                 support_templates = encoder_cache['support_templates']
+                
+                # Restore vocab if it was saved
+                if 'vocab' in encoder_cache and not hasattr(encoder, 'vocab'):
+                    encoder.vocab = encoder_cache['vocab']
             
             # Validate data exists (less strict)
             if train_data and support_set:
@@ -502,8 +521,17 @@ def process_target_system(params, logger, template_encoder, source_data):
             dropout=params["dropout_rate"]
         ).to(DEVICE)
         
+        # Make sure vocab is accessible as an attribute
+        encoder.vocab = target_vocab
+        
         # Initialize repr_lookup
         encoder.repr_lookup = {}
+        
+        # Temporarily remove attributes for pickling
+        vocab_backup = None
+        if hasattr(encoder, 'vocab'):
+            vocab_backup = encoder.vocab
+            delattr(encoder, 'vocab')
         
         # Save data to cache
         data_cache = {
@@ -519,10 +547,15 @@ def process_target_system(params, logger, template_encoder, source_data):
             'encoder': encoder,
             'support_set': support_set,
             'query_set': query_set,
-            'support_templates': support_templates
+            'support_templates': support_templates,
+            'vocab': vocab_backup
         }
         with open(encoder_cache_file, 'wb') as f:
             pickle.dump(encoder_cache, f)
+            
+        # Restore vocab attribute
+        if vocab_backup is not None:
+            encoder.vocab = vocab_backup
     
     # Return the processed data
     return {

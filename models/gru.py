@@ -76,6 +76,8 @@ class AttGRUModel(nn.Module):
         """
         super(AttGRUModel, self).__init__()
         self.dropout = dropout
+        # Store vocab as an attribute so it can be accessed later
+        self.vocab = vocab
         vocab_size, word_dims = vocab.vocab_size, vocab.word_dim
         # Loads pretrained embeddings from vocab.embeddings
         self.word_embed = CPUEmbedding(
@@ -195,16 +197,24 @@ class AttGRUModel(nn.Module):
         Returns:
             The model on the specified device
         """
-        # Store repr_lookup temporarily
+        # Store attributes that shouldn't be moved to device
         repr_lookup = {}
         if hasattr(self, 'repr_lookup'):
             repr_lookup = self.repr_lookup
             delattr(self, 'repr_lookup')
+        
+        # Store vocab temporarily if it exists
+        vocab_backup = None
+        if hasattr(self, 'vocab'):
+            vocab_backup = self.vocab
+            delattr(self, 'vocab')
             
         # Move model to device
         super(AttGRUModel, self).to(device)
         
-        # Restore repr_lookup
+        # Restore attributes
         self.repr_lookup = repr_lookup
+        if vocab_backup is not None:
+            self.vocab = vocab_backup
         
         return self

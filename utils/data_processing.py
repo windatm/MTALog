@@ -116,9 +116,56 @@ def prepare_batch_for_training(logs, vocab, max_length=100):
     sequences = []
     labels = []
     
+    # Input validation
+    if logs is None or len(logs) == 0:
+        print("Warning: Empty log batch provided to prepare_batch_for_training")
+        return torch.zeros((1, max_length), dtype=torch.long), torch.zeros(1, dtype=torch.long)
+    
+    if vocab is None:
+        print("Warning: No vocab provided to prepare_batch_for_training")
+        return torch.zeros((len(logs), max_length), dtype=torch.long), torch.zeros(len(logs), dtype=torch.long)
+    
+    # Print diagnostics about the first log
+    first_log = logs[0]
+    print(f"Log type: {type(first_log).__name__}")
+    print(f"Log attributes: {dir(first_log)}")
+    print(f"Has template_ids: {hasattr(first_log, 'template_ids')}")
+    print(f"Has sequence: {hasattr(first_log, 'sequence')}")
+    if hasattr(first_log, 'sequence'):
+        print(f"Sequence type: {type(first_log.sequence).__name__}")
+        print(f"Sequence length: {len(first_log.sequence)}")
+        if len(first_log.sequence) > 0:
+            print(f"First sequence item: {first_log.sequence[0]}")
+    
+    # Print vocab info
+    print(f"Vocab type: {type(vocab).__name__}")
+    print(f"Has template_to_idx: {hasattr(vocab, 'template_to_idx')}")
+    print(f"Has word2id: {hasattr(vocab, 'word2id')}")
+    
     for log in logs:
-        # Convert template IDs to vocab indices
-        sequence = [vocab.template_to_idx(template) for template in log.template_ids]
+        # Get sequence from log
+        if hasattr(log, 'template_ids'):
+            # Use template_ids if available
+            template_sequence = log.template_ids
+        elif hasattr(log, 'sequence'):
+            # Fall back to using sequence attribute
+            template_sequence = log.sequence
+        else:
+            # If no sequence information is available, use an empty sequence
+            print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no template_ids or sequence")
+            template_sequence = []
+        
+        # Convert to vocab indices - use template_to_idx if available, otherwise word2id
+        try:
+            if hasattr(vocab, 'template_to_idx'):
+                sequence = [vocab.template_to_idx(template) for template in template_sequence]
+            else:
+                # Fall back to word2id method if template_to_idx doesn't exist
+                sequence = [vocab.word2id(str(template)) for template in template_sequence]
+        except Exception as e:
+            print(f"Error converting templates to indices: {str(e)}")
+            # Use default indices (0) if conversion fails
+            sequence = [0] * min(len(template_sequence), max_length)
         
         # Pad or truncate to max_length
         if len(sequence) > max_length:
@@ -127,8 +174,25 @@ def prepare_batch_for_training(logs, vocab, max_length=100):
             sequence = sequence + [0] * (max_length - len(sequence))  # Pad with zeros
         
         sequences.append(sequence)
-        labels.append(log.label)
+        
+        # Get label
+        if hasattr(log, 'label'):
+            # Convert string labels to integers if needed
+            if isinstance(log.label, str):
+                if log.label.lower() in ['normal', '0']:
+                    labels.append(0)
+                elif log.label.lower() in ['anomalous', 'anomaly', '1']:
+                    labels.append(1)
+                else:
+                    labels.append(int(log.label) if log.label.isdigit() else 0)
+            else:
+                labels.append(int(log.label))
+        else:
+            # Default to normal (0) if no label is available
+            print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no label")
+            labels.append(0)
     
+    print(f"Prepared {len(sequences)} sequences with length {max_length}")
     return torch.tensor(sequences), torch.tensor(labels)
 
 def calculate_metrics(y_true, y_pred):

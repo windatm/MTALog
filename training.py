@@ -19,6 +19,14 @@ from utils.data_processing import (
 )
 
 
+def ensure_vocab_has_template_to_idx(vocab):
+    """Add a template_to_idx method to the vocab object if it doesn't have one."""
+    if not hasattr(vocab, 'template_to_idx'):
+        # Add the method dynamically
+        vocab.template_to_idx = lambda template: vocab.word2id(str(template))
+    return vocab
+
+
 def meta_train_step(source_support_set, source_query_set, encoder, optimizer, device, batch_size=32):
     """
     Perform one meta-training step on source data
@@ -45,6 +53,9 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         vocab = getattr(source_support_set[0], 'vocab', None)
         if vocab is None:
             raise AttributeError("No vocab found in encoder or support set. Cannot proceed with training.")
+    
+    # Ensure vocab has template_to_idx method
+    vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare support and query data
     support_inputs, support_labels = prepare_batch_for_training(source_support_set, vocab)
@@ -99,6 +110,9 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         vocab = getattr(target_support_set[0], 'vocab', None)
         if vocab is None:
             raise AttributeError("No vocab found in encoder or support set. Cannot proceed with testing.")
+    
+    # Ensure vocab has template_to_idx method
+    vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare support and query data
     support_inputs, support_labels = prepare_batch_for_training(target_support_set, vocab)
@@ -307,6 +321,9 @@ def evaluate_model(
             from utils.vocab import Vocab
             vocab = Vocab()
     
+    # Ensure vocab has template_to_idx method
+    vocab = ensure_vocab_has_template_to_idx(vocab)
+    
     # Prepare test data
     test_inputs, test_labels = prepare_batch_for_training(test_data, vocab)
     
@@ -372,6 +389,9 @@ def predict(
         vocab = getattr(log_sequences[0], 'vocab', None)
         if vocab is None:
             raise AttributeError("No vocab found in encoder or log sequences. Cannot make predictions.")
+    
+    # Ensure vocab has template_to_idx method
+    vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare inputs
     inputs, _ = prepare_batch_for_training(log_sequences, vocab)

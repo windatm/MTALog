@@ -358,13 +358,18 @@ class NonLinear(nn.Module):
     Raises:
         ValueError: If the provided activation is not callable.
     """
+    class Identity(nn.Module):
+        """Identity activation function that is picklable."""
+        def forward(self, x):
+            return x
+            
     def __init__(self, input_size, hidden_size, activation=None):
         super(NonLinear, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.linear = nn.Linear(in_features=input_size, out_features=hidden_size)
         if activation is None:
-            self._activate = lambda x: x
+            self._activate = NonLinear.Identity()
         else:
             if not callable(activation):
                 raise ValueError(

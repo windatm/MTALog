@@ -187,6 +187,14 @@ def process_source_systems(params, logger, template_encoder):
                     support_set = encoder_cache['support_set']
                     query_set = encoder_cache['query_set']
                 
+                # Rebuild repr_lookup if needed
+                if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
+                    encoder.repr_lookup = {}
+                    # Rebuild from support and query sets
+                    for inst in support_set + query_set:
+                        if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
+                            encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
+                
                 # Validate data has both normal and anomaly logs
                 normal_count = len([x for x in train_data if x.label == 0])
                 anomaly_count = len([x for x in train_data if x.label == 1])
@@ -263,6 +271,10 @@ def process_source_systems(params, logger, template_encoder):
                 tuple(inst.sequence): inst.repr for inst in encoded_data
             }
             
+            # Temporarily store repr_lookup
+            repr_lookup = encoder.repr_lookup
+            encoder.repr_lookup = {}  # Empty dict for pickling
+            
             # Save encoder and encoded data to cache
             encoder_cache = {
                 'encoder': encoder,
@@ -271,6 +283,9 @@ def process_source_systems(params, logger, template_encoder):
             }
             with open(encoder_cache_file, 'wb') as f:
                 pickle.dump(encoder_cache, f)
+                
+            # Restore repr_lookup
+            encoder.repr_lookup = repr_lookup
         
         # Store processed data
         source_processors[source_system] = processor
@@ -340,6 +355,14 @@ def process_target_system(params, logger, template_encoder, source_data):
                 query_set = encoder_cache['query_set']
                 support_templates = encoder_cache['support_templates']
             
+            # Rebuild repr_lookup if needed
+            if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
+                encoder.repr_lookup = {}
+                # Rebuild from support and query sets
+                for inst in support_set + query_set:
+                    if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
+                        encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
+            
             # Validate data has both normal and anomaly logs
             normal_count = len([x for x in train_data if x.label == 0])
             anomaly_count = len([x for x in train_data if x.label == 1])
@@ -395,6 +418,9 @@ def process_target_system(params, logger, template_encoder, source_data):
             lstm_hiddens=params["lstm_hidden_units"],
             dropout=params["dropout_rate"]
         ).to(DEVICE)
+        
+        # Initialize repr_lookup
+        encoder.repr_lookup = {}
         
         # Save data to cache
         data_cache = {

@@ -184,3 +184,27 @@ class AttGRUModel(nn.Module):
         recon = self.decoder(represents)
 
         return logits, recon, represents
+
+    def to(self, device):
+        """
+        Custom implementation of to() to handle device transfer and ensure proper pickling.
+        
+        Args:
+            device: The device to move the model to
+            
+        Returns:
+            The model on the specified device
+        """
+        # Store repr_lookup temporarily
+        repr_lookup = {}
+        if hasattr(self, 'repr_lookup'):
+            repr_lookup = self.repr_lookup
+            delattr(self, 'repr_lookup')
+            
+        # Move model to device
+        super(AttGRUModel, self).to(device)
+        
+        # Restore repr_lookup
+        self.repr_lookup = repr_lookup
+        
+        return self

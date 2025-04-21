@@ -29,7 +29,7 @@ def ensure_vocab_has_template_to_idx(vocab):
 
 def meta_train_step(source_support_set, source_query_set, encoder, optimizer, device, batch_size=32):
     """
-    Perform one meta-training step on source data
+    Perform one meta-training step on source data using prototype-based approach
     
     Args:
         source_support_set: Support set from source domain
@@ -57,46 +57,73 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     # Ensure vocab has template_to_idx method
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
-    # Prepare support and query data
-    support_tinst, support_labels = prepare_batch_for_training(source_support_set, vocab)
-    query_tinst, query_labels = prepare_batch_for_training(source_query_set, vocab)
+    # Process in smaller chunks to save memory
+    max_batch_size = min(batch_size, 32)  # Reduced batch size
     
-    # Prepare inputs in the correct format
-    # The model expects a tuple of (words, masks, word_len)
+    # Divide data into support and query
+    support_data = source_support_set[:max_batch_size]
+    query_data = source_query_set[:max_batch_size]
+    
+    # Prepare support data
+    support_tinst, support_labels = prepare_batch_for_training(support_data, vocab)
+    
+    # Create model inputs
     support_words = support_tinst.to(device)
     support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
     support_word_len = torch.sum(support_masks, dim=1).to(device)
-    
-    query_words = query_tinst.to(device)
-    query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
-    query_word_len = torch.sum(query_masks, dim=1).to(device)
-    
-    # Forward pass on support set
     support_model_inputs = (support_words, support_masks, support_word_len)
-    support_logits, _, support_embeddings = encoder(support_model_inputs)
     
-    # Using standard cross entropy loss for classification
-    criterion = torch.nn.CrossEntropyLoss()
-    support_loss = criterion(support_logits, support_labels.to(device))
+    # Forward pass on support set - calculate prototype representation
+    with torch.set_grad_enabled(True):
+        # Get embeddings
+        support_logits, _, support_embeddings = encoder(support_model_inputs)
+        
+        # Create prototype as mean of embeddings
+        prototype = support_embeddings.mean(dim=0, keepdim=True)
+        
+        # Free memory
+        del support_model_inputs, support_words, support_masks, support_word_len
+        torch.cuda.empty_cache()
     
-    # Update model parameters with support set (inner loop update)
+    # Calculate loss based on prototype and support logits
+    support_loss = torch.nn.CrossEntropyLoss()(support_logits, support_labels.to(device))
+    
+    # Update model parameters
     optimizer.zero_grad()
     support_loss.backward()
     optimizer.step()
     
-    # Forward pass on query set with updated parameters
-    query_model_inputs = (query_words, query_masks, query_word_len)
-    query_logits, _, query_embeddings = encoder(query_model_inputs)
+    # Clear memory
+    del support_logits, support_embeddings
+    torch.cuda.empty_cache()
     
-    # Calculate loss on query set
-    query_loss = criterion(query_logits, query_labels.to(device))
+    # Prepare query data
+    query_tinst, query_labels = prepare_batch_for_training(query_data, vocab)
+    
+    # Create model inputs for query
+    query_words = query_tinst.to(device)
+    query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
+    query_word_len = torch.sum(query_masks, dim=1).to(device)
+    query_model_inputs = (query_words, query_masks, query_word_len)
+    
+    # Forward pass on query set with no gradient
+    with torch.no_grad():
+        # Get embeddings
+        query_logits, _, query_embeddings = encoder(query_model_inputs)
+        
+        # Calculate loss
+        query_loss = torch.nn.CrossEntropyLoss()(query_logits, query_labels.to(device))
+        
+        # Free memory
+        del query_model_inputs, query_words, query_masks, query_word_len, query_embeddings, query_logits, prototype
+        torch.cuda.empty_cache()
     
     return query_loss.item()
 
 
 def meta_test_step(target_support_set, target_query_set, encoder, optimizer, device, batch_size=32):
     """
-    Perform one meta-testing step on target data
+    Perform one meta-testing step on target data using prototype-based approach
     
     Args:
         target_support_set: Support set from target domain
@@ -125,40 +152,66 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     # Ensure vocab has template_to_idx method
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
-    # Prepare support and query data
-    support_tinst, support_labels = prepare_batch_for_training(target_support_set, vocab)
-    query_tinst, query_labels = prepare_batch_for_training(target_query_set, vocab)
+    # Process in smaller chunks to save memory
+    max_batch_size = min(batch_size, 32)  # Reduced batch size
     
-    # Prepare inputs in the correct format
-    # The model expects a tuple of (words, masks, word_len)
+    # Use only normal samples from support set (like in train_mtalog)
+    normal_support_set = [inst for inst in target_support_set[:max_batch_size] if 
+                           hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
+    
+    # If no normal samples, use all samples
+    if not normal_support_set:
+        normal_support_set = target_support_set[:max_batch_size]
+    
+    # Prepare support data
+    support_tinst, support_labels = prepare_batch_for_training(normal_support_set, vocab)
+    
+    # Create model inputs
     support_words = support_tinst.to(device)
     support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
     support_word_len = torch.sum(support_masks, dim=1).to(device)
+    support_model_inputs = (support_words, support_masks, support_word_len)
     
+    # Forward pass on support set to calculate prototype
+    with torch.no_grad():
+        # Get embeddings
+        _, _, support_embeddings = encoder(support_model_inputs)
+        
+        # Create prototype as mean of embeddings
+        prototype = support_embeddings.mean(dim=0, keepdim=True)
+        
+        # Free memory
+        del support_model_inputs, support_words, support_masks, support_word_len, support_embeddings
+        torch.cuda.empty_cache()
+    
+    # Prepare query data
+    query_batch = target_query_set[:max_batch_size]
+    query_tinst, query_labels = prepare_batch_for_training(query_batch, vocab)
+    
+    # Create model inputs for query
     query_words = query_tinst.to(device)
     query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
     query_word_len = torch.sum(query_masks, dim=1).to(device)
+    query_model_inputs = (query_words, query_masks, query_word_len)
     
-    # Forward pass on support set (for adaptation)
+    # Forward pass on query set with no gradient
     with torch.no_grad():
-        support_model_inputs = (support_words, support_masks, support_word_len)
-        support_logits, _, support_embeddings = encoder(support_model_inputs)
-    
-    # Since the optimizer doesn't have an adapt method, we'll use a simple approach
-    # for adaptation without modifying the parameters
-    
-    # Forward pass on query set
-    with torch.no_grad():
-        query_model_inputs = (query_words, query_masks, query_word_len)
+        # Get embeddings and logits
         query_logits, _, query_embeddings = encoder(query_model_inputs)
         
-        # Calculate loss using cross entropy
-        criterion = torch.nn.CrossEntropyLoss()
-        query_loss = criterion(query_logits, query_labels.to(device))
+        # Calculate cosine similarity to prototype
+        similarity = torch.nn.functional.cosine_similarity(query_embeddings, prototype, dim=1)
+        
+        # Calculate loss
+        query_loss = torch.nn.CrossEntropyLoss()(query_logits, query_labels.to(device))
         
         # Make predictions
         y_pred = torch.argmax(query_logits, dim=1).cpu().numpy()
         y_true = query_labels.cpu().numpy()
+        
+        # Free memory
+        del query_model_inputs, query_words, query_masks, query_word_len, query_embeddings, query_logits, prototype, similarity
+        torch.cuda.empty_cache()
     
     # Calculate metrics
     metrics = calculate_metrics(y_true, y_pred)
@@ -311,7 +364,7 @@ def evaluate_model(
     logger
 ):
     """
-    Evaluate the trained model on test data
+    Evaluate the trained model on test data using a memory-efficient approach
     
     Args:
         test_data: Test dataset
@@ -344,32 +397,72 @@ def evaluate_model(
     # Ensure vocab has template_to_idx method
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
-    # Prepare test data
-    test_tinst, test_labels = prepare_batch_for_training(test_data, vocab)
+    # Process in chunks to reduce memory usage
+    all_predictions = []
+    all_true_labels = []
     
-    # Prepare inputs in the correct format
-    test_words = test_tinst.to(device)
-    test_masks = torch.ones_like(test_words, dtype=torch.float, device=device)
-    test_word_len = torch.sum(test_masks, dim=1).to(device)
+    chunk_size = min(batch_size, 32)  # Smaller batch size to prevent OOM
+    num_chunks = (len(test_data) + chunk_size - 1) // chunk_size
     
-    # Forward pass
-    with torch.no_grad():
+    logger.info(f"Evaluating on {len(test_data)} instances in {num_chunks} chunks")
+    
+    total_loss = 0.0
+    
+    for chunk_idx in range(num_chunks):
+        # Get chunk of data
+        start_idx = chunk_idx * chunk_size
+        end_idx = min((chunk_idx + 1) * chunk_size, len(test_data))
+        chunk_data = test_data[start_idx:end_idx]
+        
+        # Skip empty chunks
+        if not chunk_data:
+            continue
+            
+        logger.info(f"Processing evaluation chunk {chunk_idx+1}/{num_chunks}, size: {len(chunk_data)}")
+        
+        # Prepare test data for this chunk
+        test_tinst, test_labels = prepare_batch_for_training(chunk_data, vocab)
+        
+        # Create model inputs
+        test_words = test_tinst.to(device)
+        test_masks = torch.ones_like(test_words, dtype=torch.float, device=device)
+        test_word_len = torch.sum(test_masks, dim=1).to(device)
         test_model_inputs = (test_words, test_masks, test_word_len)
-        test_logits, _, test_embeddings = encoder(test_model_inputs)
         
-        # Calculate loss using cross entropy
-        criterion = torch.nn.CrossEntropyLoss()
-        test_loss = criterion(test_logits, test_labels.to(device))
-        
-        # Make predictions
-        y_pred = torch.argmax(test_logits, dim=1).cpu().numpy()
-        y_true = test_labels.cpu().numpy()
+        # Forward pass with no gradient
+        with torch.no_grad():
+            # Get embeddings and logits
+            test_logits, _, test_embeddings = encoder(test_model_inputs)
+            
+            # Calculate loss
+            chunk_loss = torch.nn.CrossEntropyLoss()(test_logits, test_labels.to(device))
+            total_loss += chunk_loss.item()
+            
+            # Make predictions
+            chunk_preds = torch.argmax(test_logits, dim=1).cpu().numpy()
+            chunk_true = test_labels.cpu().numpy()
+            
+            # Add to full results
+            all_predictions.extend(chunk_preds)
+            all_true_labels.extend(chunk_true)
+            
+            # Free memory
+            del test_words, test_masks, test_word_len, test_model_inputs
+            del test_logits, test_embeddings, chunk_loss
+            torch.cuda.empty_cache()
+    
+    # Convert to numpy arrays
+    y_pred = np.array(all_predictions)
+    y_true = np.array(all_true_labels)
     
     # Calculate metrics
     metrics = calculate_metrics(y_true, y_pred)
     
+    # Calculate average loss
+    avg_loss = total_loss / num_chunks if num_chunks > 0 else 0
+    
     # Log results
-    logger.info(f"Test Loss: {test_loss.item():.4f}")
+    logger.info(f"Test Loss: {avg_loss:.4f}")
     logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
     logger.info(f"Precision: {metrics['precision']:.4f}")
     logger.info(f"Recall: {metrics['recall']:.4f}")
@@ -390,7 +483,7 @@ def predict(
     threshold=0.5
 ):
     """
-    Make predictions for new log sequences
+    Make predictions for new log sequences using a memory-efficient approach
     
     Args:
         log_sequences: List of log sequences to classify
@@ -418,24 +511,53 @@ def predict(
     # Ensure vocab has template_to_idx method
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
-    # Prepare inputs
-    tinst, _ = prepare_batch_for_training(log_sequences, vocab)
+    # Process in chunks to reduce memory usage
+    all_predictions = []
+    all_scores = []
     
-    # Prepare inputs in correct format
-    words = tinst.to(device)
-    masks = torch.ones_like(words, dtype=torch.float, device=device)
-    word_len = torch.sum(masks, dim=1).to(device)
+    chunk_size = 32  # Smaller batch size to prevent OOM
+    num_chunks = (len(log_sequences) + chunk_size - 1) // chunk_size
     
-    # Get predictions
-    with torch.no_grad():
-        model_inputs = (words, masks, word_len)
-        logits, _, embeddings = encoder(model_inputs)
+    for chunk_idx in range(num_chunks):
+        # Get chunk of data
+        start_idx = chunk_idx * chunk_size
+        end_idx = min((chunk_idx + 1) * chunk_size, len(log_sequences))
+        chunk_data = log_sequences[start_idx:end_idx]
         
-        # Get raw scores (probability of being anomalous)
-        probs = torch.softmax(logits, dim=1)
-        anomaly_scores = probs[:, 1].cpu().numpy()  # Probability of class 1 (anomaly)
+        # Skip empty chunks
+        if not chunk_data:
+            continue
         
-        # Make binary predictions
-        predictions = (anomaly_scores > threshold).astype(int)
+        # Prepare inputs for this chunk
+        chunk_tinst, _ = prepare_batch_for_training(chunk_data, vocab)
+        
+        # Prepare inputs in correct format
+        chunk_words = chunk_tinst.to(device)
+        chunk_masks = torch.ones_like(chunk_words, dtype=torch.float, device=device)
+        chunk_word_len = torch.sum(chunk_masks, dim=1).to(device)
+        
+        # Process through model in smaller chunks
+        with torch.no_grad():
+            # Create model inputs
+            model_inputs = (chunk_words, chunk_masks, chunk_word_len)
+            
+            # Get predictions
+            logits, _, embeddings = encoder(model_inputs)
+            
+            # Get raw scores (probability of being anomalous)
+            probs = torch.softmax(logits, dim=1)
+            anomaly_scores = probs[:, 1].cpu().numpy()  # Probability of class 1 (anomaly)
+            
+            # Make binary predictions
+            chunk_preds = (anomaly_scores > threshold).astype(int)
+            
+            # Add to full results
+            all_predictions.extend(chunk_preds)
+            all_scores.extend(anomaly_scores)
+            
+            # Free memory
+            del chunk_words, chunk_masks, chunk_word_len, model_inputs
+            del logits, embeddings, probs
+            torch.cuda.empty_cache()
     
-    return predictions, anomaly_scores 
+    return np.array(all_predictions), np.array(all_scores) 

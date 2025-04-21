@@ -541,12 +541,20 @@ def train_model(params, logger, source_data, target_data):
     """Train the model"""
     logger.info("=== Starting model training ===")
     
-    # Create optimizer
+    # Get encoder parameters to optimize
+    target_encoder = target_data["target_encoder"]
+    
+    # Create optimizer with the correct parameters
     optimizer = Optimizer(
-        alpha=params["alpha"],
-        beta=params["beta"],
-        gamma=params["gamma"]
+        parameter=target_encoder.parameters(),
+        lr=params["gamma"]  # Use gamma as our learning rate
     )
+    
+    # Store meta-learning rates
+    inner_lr = params["alpha"]  # Meta-train inner loop learning rate
+    outer_weight = params["beta"]  # Meta-test loss weight
+    
+    logger.info(f"Using learning rates - Inner: {inner_lr}, Outer weight: {outer_weight}, Optimizer: {params['gamma']}")
     
     # Train the model
     for epoch in range(params["num_epochs"]):
@@ -559,11 +567,8 @@ def train_model(params, logger, source_data, target_data):
             query_set = source_data["source_query_sets"][source_system]
             encoder = source_data["source_encoders"][source_system]
             
-            # Training logic here
-            # This would include:
-            # - Encoding support and query sets
-            # - Calculating meta-train loss
-            # - Updating model parameters
+            # Training logic would go here
+            # Using inner_lr for meta-train updates
             
             # Placeholder for actual implementation
             pass
@@ -572,17 +577,16 @@ def train_model(params, logger, source_data, target_data):
         logger.info(f"Meta-testing on {params['target_system']}")
         target_support_set = target_data["target_support_set"]
         target_query_set = target_data["target_query_set"]
-        target_encoder = target_data["target_encoder"]
         
-        # Testing logic here
-        # This would include:
-        # - Encoding support and query sets
-        # - Calculating meta-test loss
-        # - Evaluating performance
+        # Testing logic would go here
+        # Using outer_weight to scale meta-test loss
         
         # Placeholder for actual implementation
         pass
-    
+        
+        # Update the model using the optimizer
+        optimizer.step()
+        
     # Save the trained model
     model_path = os.path.join(source_data["output_model_dir"], f"{params['target_system']}_model.pt")
     # Actual save logic would go here

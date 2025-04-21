@@ -135,44 +135,47 @@ def train_mode(args):
     source_data = process_source_systems(params, logger, template_encoder)
     
     # Process target system
-    # target_data = process_target_system(params, logger, template_encoder, source_data)
+    target_data = process_target_system(params, logger, template_encoder, source_data)
     
-    # # Create optimizer
-    # optimizer = Optimizer(
-    #     alpha=params['alpha'],
-    #     beta=params['beta'],
-    #     gamma=params['gamma']
-    # )
+    # Create optimizer with correct parameters
+    if hasattr(target_data["target_encoder"], "parameters"):
+        optimizer = Optimizer(
+            parameter=target_data["target_encoder"].parameters(),
+            lr=params['gamma']
+        )
+    else:
+        logger.error("Error: target_encoder does not have a parameters method")
+        return
     
-    # # Train model
-    # best_model, best_f1 = train_model(
-    #     source_systems=params['source_systems'],
-    #     source_support_sets=source_data['source_support_sets'],
-    #     source_query_sets=source_data['source_query_sets'],
-    #     target_support_set=target_data['target_support_set'],
-    #     target_query_set=target_data['target_query_set'],
-    #     source_encoders=source_data['source_encoders'],
-    #     target_encoder=target_data['target_encoder'],
-    #     optimizer=optimizer,
-    #     device=DEVICE,
-    #     num_epochs=params['num_epochs'],
-    #     batch_size=params['batch_size'],
-    #     output_model_dir=source_data['output_model_dir'],
-    #     logger=logger
-    # )
+    # Train model
+    best_model, best_f1 = train_model(
+        source_systems=params['source_systems'],
+        source_support_sets=source_data['source_support_sets'],
+        source_query_sets=source_data['source_query_sets'],
+        target_support_set=target_data['target_support_set'],
+        target_query_set=target_data['target_query_set'],
+        source_encoders=source_data['source_encoders'],
+        target_encoder=target_data['target_encoder'],
+        optimizer=optimizer,
+        device=DEVICE,
+        num_epochs=params['num_epochs'],
+        batch_size=params['batch_size'],
+        output_model_dir=source_data['output_model_dir'],
+        logger=logger
+    )
     
-    # # Final evaluation
-    # final_metrics = evaluate_model(
-    #     test_data=target_data['target_inst_test'],
-    #     encoder=target_data['target_encoder'],
-    #     optimizer=optimizer,
-    #     device=DEVICE,
-    #     batch_size=params['batch_size'],
-    #     logger=logger
-    # )
+    # Final evaluation
+    final_metrics = evaluate_model(
+        test_data=target_data['target_inst_test'],
+        encoder=target_data['target_encoder'],
+        optimizer=optimizer,
+        device=DEVICE,
+        batch_size=params['batch_size'],
+        logger=logger
+    )
     
-    # logger.info("Training complete!")
-    # return final_metrics
+    logger.info("Training complete!")
+    return final_metrics
 
 
 def eval_mode(args):
@@ -226,9 +229,8 @@ def eval_mode(args):
     
     # Create optimizer
     optimizer = Optimizer(
-        alpha=params['alpha'],
-        beta=params['beta'],
-        gamma=params['gamma']
+        parameter=target_encoder.parameters(),
+        lr=params['gamma']
     )
     
     # Evaluate model

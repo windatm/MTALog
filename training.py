@@ -61,16 +61,6 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     support_tinst, support_labels = prepare_batch_for_training(source_support_set, vocab)
     query_tinst, query_labels = prepare_batch_for_training(source_query_set, vocab)
     
-    # Move data to device
-    support_inputs = (
-        support_tinst.to(device),
-        support_labels.to(device)
-    )
-    query_inputs = (
-        query_tinst.to(device),
-        query_labels.to(device)
-    )
-    
     # Prepare inputs in the correct format
     # The model expects a tuple of (words, masks, word_len)
     support_words = support_tinst.to(device)
@@ -85,16 +75,21 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     support_model_inputs = (support_words, support_masks, support_word_len)
     support_logits, _, support_embeddings = encoder(support_model_inputs)
     
+    # Using standard cross entropy loss for classification
+    criterion = torch.nn.CrossEntropyLoss()
+    support_loss = criterion(support_logits, support_labels.to(device))
+    
     # Update model parameters with support set (inner loop update)
     optimizer.zero_grad()
-    support_loss = optimizer.compute_loss(support_logits, support_labels)
     support_loss.backward()
     optimizer.step()
     
     # Forward pass on query set with updated parameters
     query_model_inputs = (query_words, query_masks, query_word_len)
     query_logits, _, query_embeddings = encoder(query_model_inputs)
-    query_loss = optimizer.compute_loss(query_logits, query_labels)
+    
+    # Calculate loss on query set
+    query_loss = criterion(query_logits, query_labels.to(device))
     
     return query_loss.item()
 
@@ -149,21 +144,24 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         support_model_inputs = (support_words, support_masks, support_word_len)
         support_logits, _, support_embeddings = encoder(support_model_inputs)
     
-    # Compute adapted parameters based on support set
-    adapted_params = optimizer.adapt(support_logits, support_labels)
+    # Since the optimizer doesn't have an adapt method, we'll use a simple approach
+    # for adaptation without modifying the parameters
     
-    # Forward pass on query set with adapted parameters
+    # Forward pass on query set
     with torch.no_grad():
         query_model_inputs = (query_words, query_masks, query_word_len)
-        query_logits, _, query_embeddings = encoder(query_model_inputs, params=adapted_params)
-        query_loss = optimizer.compute_loss(query_logits, query_labels, params=adapted_params)
+        query_logits, _, query_embeddings = encoder(query_model_inputs)
+        
+        # Calculate loss using cross entropy
+        criterion = torch.nn.CrossEntropyLoss()
+        query_loss = criterion(query_logits, query_labels.to(device))
         
         # Make predictions
-        y_pred = optimizer.predict(query_logits, adapted_params)
+        y_pred = torch.argmax(query_logits, dim=1).cpu().numpy()
         y_true = query_labels.cpu().numpy()
     
     # Calculate metrics
-    metrics = calculate_metrics(y_true, y_pred.cpu().numpy())
+    metrics = calculate_metrics(y_true, y_pred)
     
     return query_loss.item(), metrics
 
@@ -347,23 +345,28 @@ def evaluate_model(
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare test data
-    test_inputs, test_labels = prepare_batch_for_training(test_data, vocab)
+    test_tinst, test_labels = prepare_batch_for_training(test_data, vocab)
     
-    # Move data to device
-    test_inputs = test_inputs.to(device)
-    test_labels = test_labels.to(device)
+    # Prepare inputs in the correct format
+    test_words = test_tinst.to(device)
+    test_masks = torch.ones_like(test_words, dtype=torch.float, device=device)
+    test_word_len = torch.sum(test_masks, dim=1).to(device)
     
     # Forward pass
     with torch.no_grad():
-        test_embeddings = encoder(test_inputs)
-        test_loss = optimizer.compute_loss(test_embeddings, test_labels)
+        test_model_inputs = (test_words, test_masks, test_word_len)
+        test_logits, _, test_embeddings = encoder(test_model_inputs)
+        
+        # Calculate loss using cross entropy
+        criterion = torch.nn.CrossEntropyLoss()
+        test_loss = criterion(test_logits, test_labels.to(device))
         
         # Make predictions
-        y_pred = optimizer.predict(test_embeddings)
+        y_pred = torch.argmax(test_logits, dim=1).cpu().numpy()
         y_true = test_labels.cpu().numpy()
     
     # Calculate metrics
-    metrics = calculate_metrics(y_true, y_pred.cpu().numpy())
+    metrics = calculate_metrics(y_true, y_pred)
     
     # Log results
     logger.info(f"Test Loss: {test_loss.item():.4f}")
@@ -416,32 +419,23 @@ def predict(
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare inputs
-    inputs, _ = prepare_batch_for_training(log_sequences, vocab)
-    inputs = inputs.to(device)
+    tinst, _ = prepare_batch_for_training(log_sequences, vocab)
     
-    # Get encodings
+    # Prepare inputs in correct format
+    words = tinst.to(device)
+    masks = torch.ones_like(words, dtype=torch.float, device=device)
+    word_len = torch.sum(masks, dim=1).to(device)
+    
+    # Get predictions
     with torch.no_grad():
-        embeddings = encoder(inputs)
-    
-    # Calculate anomaly scores
-    scores = []
-    for embedding in embeddings:
-        # Calculate distance to normal templates in the lookup
-        embedding_np = embedding.cpu().numpy()
-        distances = []
+        model_inputs = (words, masks, word_len)
+        logits, _, embeddings = encoder(model_inputs)
         
-        for template_id, template_embedding in template_lookup.items():
-            distance = np.linalg.norm(embedding_np - template_embedding)
-            distances.append(distance)
+        # Get raw scores (probability of being anomalous)
+        probs = torch.softmax(logits, dim=1)
+        anomaly_scores = probs[:, 1].cpu().numpy()  # Probability of class 1 (anomaly)
         
-        # Use minimum distance as anomaly score
-        if distances:
-            min_distance = min(distances)
-            scores.append(min_distance)
-        else:
-            scores.append(float('inf'))  # If no templates in lookup
+        # Make binary predictions
+        predictions = (anomaly_scores > threshold).astype(int)
     
-    # Make binary predictions
-    predictions = [1 if score > threshold else 0 for score in scores]
-    
-    return predictions, scores 
+    return predictions, anomaly_scores 

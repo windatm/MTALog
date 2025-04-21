@@ -116,7 +116,16 @@ def setup_template_encoder(params):
 
 
 def process_source_systems(params, logger, template_encoder):
-    """Process source log systems"""
+    """Process source log systems and create a combined vocabulary from all systems.
+    
+    Args:
+        params: Dictionary containing parameters for processing
+        logger: Logger instance for logging messages
+        template_encoder: Encoder for templates
+        
+    Returns:
+        Dictionary containing processed source systems data
+    """
     source_processors = OrderedDict()
     source_vocabularies = OrderedDict() 
     source_encoders = OrderedDict()
@@ -137,29 +146,13 @@ def process_source_systems(params, logger, template_encoder):
             with open(combined_cache_file, 'rb') as f:
                 combined_data = pickle.load(f)
                 
-                # Less strict validation - check only that required keys exist
-                if all(key in combined_data for key in [
-                    "source_processors", "source_vocabularies", "source_encoders", 
-                    "source_support_sets", "source_query_sets", "combined_vocab"
-                ]):
-                    logger.info("Using cached source systems data")
-                    
-                    # Ensure repr_lookup exists for each encoder
-                    for system, encoder in combined_data.get("source_encoders", {}).items():
-                        if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
-                            support_set = combined_data.get("source_support_sets", {}).get(system, [])
-                            query_set = combined_data.get("source_query_sets", {}).get(system, [])
-                            
-                            # Initialize repr_lookup if needed
-                            encoder.repr_lookup = {}
-                            for inst in support_set + query_set:
-                                if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
-                                    encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
-                    
-                    return combined_data
-                
-                # Delete invalid cache
-                os.remove(combined_cache_file)
+            # Basic validation that required keys exist
+            required_keys = ["source_processors", "source_vocabularies", "source_encoders", 
+                            "source_support_sets", "source_query_sets", "combined_vocab"]
+            
+            if all(key in combined_data for key in required_keys):
+                logger.info("Using cached source systems data")
+                return combined_data
                 
         except Exception as e:
             logger.warning(f"Error loading cache: {str(e)}. Reprocessing...")
@@ -191,28 +184,22 @@ def process_source_systems(params, logger, template_encoder):
                     encoder = encoder_cache['encoder']
                     support_set = encoder_cache['support_set']
                     query_set = encoder_cache['query_set']
-                    
-                    # Restore vocab if it was saved
-                    if 'vocab' in encoder_cache and not hasattr(encoder, 'vocab'):
-                        encoder.vocab = encoder_cache['vocab']
                 
-                # Validate data exists (less strict)
-                if train_data and hasattr(processor, 'embedding') and vocab:
+                # Validate data exists
+                if train_data and len(train_data) > 0:
                     logger.info(f"[{source_system}] Loaded from cache: {len(train_data)} instances")
                     
                     # Count normal and abnormal logs
                     normal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
                     abnormal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
-                    logger.info(f"[{source_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs")
                     
-                    # Rebuild repr_lookup if needed
-                    if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
-                        encoder.repr_lookup = {}
-                        for inst in support_set + query_set:
-                            if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
-                                encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
-                    
-                    data_loaded = True
+                    if len(normal_logs) == 0 and len(abnormal_logs) == 0:
+                        logger.warning(f"[{source_system}] No valid logs found in cache. Reprocessing...")
+                        os.remove(data_cache_file)
+                        os.remove(encoder_cache_file)
+                    else:
+                        logger.info(f"[{source_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs")
+                        data_loaded = True
                 else:
                     logger.warning(f"[{source_system}] Cache data validation failed. Reprocessing...")
                     os.remove(data_cache_file)
@@ -273,56 +260,24 @@ def process_source_systems(params, logger, template_encoder):
             
             # Step 5: Split into support/query
             random.shuffle(encoded_data)
+            split_index = int(0.5 * len(encoded_data))
+            support_set = encoded_data[:split_index]
+            query_set = encoded_data[split_index:]
             
-            # Handle both numeric and string labels for normal logs
-            normal_logs = [x for x in encoded_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
-            abnormal_logs = [x for x in encoded_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
-            
-            logger.info(f"[{source_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs for encoding")
-            
-            # Handle the case when there are no normal logs
-            if not normal_logs:
-                logger.warning(f"[{source_system}] No normal logs found for support/query split. Using a portion of abnormal logs.")
-                split_index = int(0.5 * len(encoded_data))
-                support_set = encoded_data[:split_index]
-                query_set = encoded_data[split_index:]
-            else:
-                # Use a fixed split for simplicity
-                split_index = int(0.5 * len(encoded_data))
-                support_set = encoded_data[:split_index]
-                query_set = encoded_data[split_index:]
-            
-            # Step 6: Build fallback repr lookup
+            # Step 6: Build repr lookup
             encoder.repr_lookup = {
-                tuple(inst.sequence): inst.repr for inst in encoded_data
+                tuple(inst.sequence): inst.repr for inst in encoded_data if hasattr(inst, 'sequence') and hasattr(inst, 'repr')
             }
-            
-            # Temporarily store attributes that can't be pickled
-            repr_lookup = {}
-            vocab_backup = None
-            
-            if hasattr(encoder, 'repr_lookup'):
-                repr_lookup = encoder.repr_lookup
-                encoder.repr_lookup = {}  # Empty dict for pickling
-                
-            if hasattr(encoder, 'vocab'):
-                vocab_backup = encoder.vocab
-                delattr(encoder, 'vocab')  # Remove for pickling
             
             # Save encoder and encoded data to cache
             encoder_cache = {
                 'encoder': encoder,
                 'support_set': support_set,
                 'query_set': query_set,
-                'vocab': vocab_backup  # Store vocab in cache
+                'vocab': vocab
             }
             with open(encoder_cache_file, 'wb') as f:
                 pickle.dump(encoder_cache, f)
-                
-            # Restore attributes
-            encoder.repr_lookup = repr_lookup
-            if vocab_backup is not None:
-                encoder.vocab = vocab_backup
         
         # Store processed data
         source_processors[source_system] = processor
@@ -331,12 +286,23 @@ def process_source_systems(params, logger, template_encoder):
         source_support_sets[source_system] = support_set
         source_query_sets[source_system] = query_set
         
-        # Log info about support and query sets
         logger.info(f"[{source_system}] Support set: {len(support_set)} | Query set: {len(query_set)}")
     
     # Create combined vocabulary from all source systems
     combined_vocab = Vocab()
+    
+    # First initialize with template encoder embeddings
     combined_vocab.load_from_dict(template_encoder.get_embeddings())
+    
+    # Then add templates from each source system vocabulary
+    for system, vocab in source_vocabularies.items():
+        if hasattr(vocab, 'id_to_word') and vocab.id_to_word:
+            for word_id, word in vocab.id_to_word.items():
+                if word not in combined_vocab.word_to_id:
+                    # Only add if not already in combined vocab
+                    combined_vocab.add_word(word)
+    
+    logger.info(f"Created combined vocabulary with {combined_vocab.vocab_size} templates")
     
     # Return results
     result_data = {

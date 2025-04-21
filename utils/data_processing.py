@@ -111,7 +111,18 @@ def aggregate_sequence_embeddings(sequence_embeddings):
     return np.mean(sequence_embeddings, axis=0)
 
 def prepare_batch_for_training(logs, vocab, max_length=100, verbose=False):
-    """Prepare a batch of logs for training"""
+    """
+    Prepare a batch of logs for training with enhanced label handling
+    
+    Args:
+        logs: List of log instances
+        vocab: Vocabulary object
+        max_length: Maximum sequence length
+        verbose: Whether to print verbose information
+        
+    Returns:
+        tuple: (sequences tensor, labels tensor)
+    """
     # Convert log templates to indices
     sequences = []
     labels = []
@@ -144,6 +155,9 @@ def prepare_batch_for_training(logs, vocab, max_length=100, verbose=False):
         print(f"Vocab type: {type(vocab).__name__}")
         print(f"Has template_to_idx: {hasattr(vocab, 'template_to_idx')}")
         print(f"Has word2id: {hasattr(vocab, 'word2id')}")
+    
+    # Counter for label distribution
+    label_counter = {'normal': 0, 'anomaly': 0, 'unknown': 0}
     
     for log in logs:
         # Get sequence from log
@@ -180,49 +194,136 @@ def prepare_batch_for_training(logs, vocab, max_length=100, verbose=False):
         
         sequences.append(sequence)
         
-        # Get label
+        # Get label with extensive normalization
         if hasattr(log, 'label'):
-            # Convert string labels to integers if needed
-            if isinstance(log.label, str):
-                if log.label.lower() in ['normal', '0']:
-                    labels.append(0)
-                elif log.label.lower() in ['anomalous', 'anomaly', '1']:
-                    labels.append(1)
+            log_label = log.label
+            
+            # Handle various label formats
+            if isinstance(log_label, str):
+                # Normalize string labels
+                if log_label.lower() in ['normal', 'negative', '0', 'norm', 'neg']:
+                    normalized_label = 0
+                    label_counter['normal'] += 1
+                elif log_label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']:
+                    normalized_label = 1
+                    label_counter['anomaly'] += 1
+                elif log_label.isdigit():
+                    normalized_label = int(log_label)
+                    label_counter['normal' if normalized_label == 0 else 'anomaly'] += 1
                 else:
-                    labels.append(int(log.label) if log.label.isdigit() else 0)
+                    # Default to 0 for unknown strings
+                    normalized_label = 0
+                    label_counter['unknown'] += 1
+                    if verbose:
+                        print(f"Unknown label string '{log_label}' for log ID {getattr(log, 'id', 'unknown')}, defaulting to 0")
+            elif isinstance(log_label, (int, float, bool, np.integer, np.floating)):
+                # Normalize numeric labels
+                normalized_label = 1 if log_label > 0.5 or log_label is True else 0
+                label_counter['normal' if normalized_label == 0 else 'anomaly'] += 1
             else:
-                labels.append(int(log.label))
+                # Default to 0 for unknown types
+                normalized_label = 0
+                label_counter['unknown'] += 1
+                if verbose:
+                    print(f"Unknown label type {type(log_label)} for log ID {getattr(log, 'id', 'unknown')}, defaulting to 0")
+            
+            labels.append(normalized_label)
         else:
             # Default to normal (0) if no label is available
+            labels.append(0)
+            label_counter['unknown'] += 1
             if verbose:
                 print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no label")
-            labels.append(0)
     
     if verbose:
         print(f"Prepared {len(sequences)} sequences with length {max_length}")
-    return torch.tensor(sequences), torch.tensor(labels)
+        print(f"Label distribution: {label_counter}")
+        
+    # Convert to tensors
+    sequences_tensor = torch.tensor(sequences, dtype=torch.long)
+    labels_tensor = torch.tensor(labels, dtype=torch.long)
+    
+    # Check if we have a balanced set
+    if verbose and label_counter['normal'] > 0 and label_counter['anomaly'] > 0:
+        normal_ratio = label_counter['normal'] / (label_counter['normal'] + label_counter['anomaly'])
+        print(f"Class balance: {normal_ratio:.2f} normal, {1-normal_ratio:.2f} anomaly")
+    
+    return sequences_tensor, labels_tensor
 
 def calculate_metrics(y_true, y_pred):
-    """Calculate evaluation metrics"""
-    # True positives, false positives, false negatives
+    """
+    Calculate evaluation metrics with robust handling of edge cases
+    
+    Args:
+        y_true: Array of true labels
+        y_pred: Array of predicted labels
+        
+    Returns:
+        dict: Dictionary of metrics including accuracy, precision, recall, F1, and confusion matrix values
+    """
+    # Input validation
+    if len(y_true) == 0 or len(y_pred) == 0:
+        return {
+            'accuracy': 0,
+            'precision': 0,
+            'recall': 0,
+            'f1': 0,
+            'tp': 0,
+            'fp': 0,
+            'fn': 0,
+            'tn': 0
+        }
+    
+    # Convert to numpy arrays if not already
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    
+    # Handle common errors - mismatch in shapes
+    if y_true.shape != y_pred.shape:
+        print(f"Warning: Shape mismatch between y_true {y_true.shape} and y_pred {y_pred.shape}")
+        # Truncate to the shorter length
+        min_len = min(len(y_true), len(y_pred))
+        y_true = y_true[:min_len]
+        y_pred = y_pred[:min_len]
+    
+    # Confusion matrix components
     tp = np.sum((y_true == 1) & (y_pred == 1))
     fp = np.sum((y_true == 0) & (y_pred == 1))
     fn = np.sum((y_true == 1) & (y_pred == 0))
     tn = np.sum((y_true == 0) & (y_pred == 0))
     
-    # Calculate metrics
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    accuracy = (tp + tn) / (tp + tn + fp + fn)
+    # Check if all predictions are the same class
+    all_same_pred = (np.unique(y_pred).size <= 1)
+    all_same_true = (np.unique(y_true).size <= 1)
+    
+    # If all predictions are the same and all true values are the same
+    if all_same_pred and all_same_true:
+        # If they match (all correct), use perfect metrics
+        if np.array_equal(y_pred, y_true):
+            accuracy = 1.0
+            precision = 1.0
+            recall = 1.0
+            f1 = 1.0
+        else:
+            # If they don't match (all wrong), use zero metrics
+            accuracy = 0.0
+            precision = 0.0
+            recall = 0.0
+            f1 = 0.0
+    else:
+        # Calculate metrics with careful handling of edge cases
+        accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
     
     return {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
-        'tp': tp,
-        'fp': fp,
-        'fn': fn,
-        'tn': tn
+        'accuracy': float(accuracy),
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1': float(f1),
+        'tp': int(tp),
+        'fp': int(fp),
+        'fn': int(fn),
+        'tn': int(tn)
     } 

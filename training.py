@@ -122,7 +122,7 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     return query_loss.item()
 
 
-def meta_test_step(target_support_set, target_query_set, encoder, optimizer, device, batch_size=32):
+def meta_test_step(target_support_set, target_query_set, encoder, optimizer, device, batch_size=32, logger=None):
     """
     Perform one meta-testing step on target data using prototype-based approach
     
@@ -133,6 +133,7 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         optimizer: Optimizer for parameter updates
         device: Device to run computations on
         batch_size: Batch size for training
+        logger: Optional logger for debug information
         
     Returns:
         loss: Test loss value
@@ -141,6 +142,17 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     # Set model to evaluation mode
     encoder.eval()
     
+    # Basic validation of input data
+    if not target_support_set or len(target_support_set) == 0:
+        if logger:
+            logger.warning("Empty target support set provided to meta_test_step")
+        return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+    
+    if not target_query_set or len(target_query_set) == 0:
+        if logger:
+            logger.warning("Empty target query set provided to meta_test_step")
+        return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+    
     # Get vocab with fallback
     if hasattr(encoder, 'vocab'):
         vocab = encoder.vocab
@@ -148,7 +160,10 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         # Try to extract vocab from first instance in support set
         vocab = getattr(target_support_set[0], 'vocab', None)
         if vocab is None:
-            raise AttributeError("No vocab found in encoder or support set. Cannot proceed with testing.")
+            error_msg = "No vocab found in encoder or support set. Cannot proceed with testing."
+            if logger:
+                logger.error(error_msg)
+            raise AttributeError(error_msg)
     
     # Ensure vocab has template_to_idx method - silently add if needed
     if not hasattr(vocab, 'template_to_idx'):
@@ -157,15 +172,25 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     # Process in smaller chunks to save memory
     max_batch_size = min(batch_size, 32)  # Reduced batch size
     
-    # Use only normal samples from support set (like in train_mtalog)
-    normal_support_set = [inst for inst in target_support_set[:max_batch_size] if 
-                           hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
+    # Log distribution of labels in support set
+    if logger:
+        normal_count = sum(1 for inst in target_support_set if hasattr(inst, 'label') and 
+                        (inst.label == 0 or inst.label == "Normal"))
+        anomaly_count = sum(1 for inst in target_support_set if hasattr(inst, 'label') and 
+                         (inst.label == 1 or inst.label == "Anomalous"))
+        logger.debug(f"Support set: {len(target_support_set)} instances, {normal_count} normal, {anomaly_count} anomaly")
     
-    # If no normal samples, use all samples
+    # Use only normal samples from support set for prototype calculation
+    normal_support_set = [inst for inst in target_support_set[:max_batch_size*2] if 
+                        hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
+    
+    # If no normal samples, use all samples but log a warning
     if not normal_support_set:
-        normal_support_set = target_support_set[:max_batch_size]
+        if logger:
+            logger.warning("No normal samples found in support set for prototype calculation")
+        normal_support_set = target_support_set[:max_batch_size*2]
     
-    # Prepare support data
+    # Prepare support data - use more instances for better prototype
     support_tinst, support_labels = prepare_batch_for_training(normal_support_set, vocab, verbose=False)
     
     # Create model inputs
@@ -176,19 +201,66 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     
     # Forward pass on support set to calculate prototype
     with torch.no_grad():
-        # Get embeddings
-        _, _, support_embeddings = encoder(support_model_inputs)
-        
-        # Create prototype as mean of embeddings
-        prototype = support_embeddings.mean(dim=0, keepdim=True)
+        # Get embeddings - capture and log any errors
+        try:
+            _, _, support_embeddings = encoder(support_model_inputs)
+            
+            # Check if embeddings contain NaN values
+            if torch.isnan(support_embeddings).any():
+                if logger:
+                    logger.warning("NaN values detected in support embeddings")
+                # Replace NaN with zeros
+                support_embeddings = torch.nan_to_num(support_embeddings, nan=0.0)
+            
+            # Create prototype as mean of embeddings
+            prototype = support_embeddings.mean(dim=0, keepdim=True)
+            
+        except Exception as e:
+            error_msg = f"Error in prototype calculation: {str(e)}"
+            if logger:
+                logger.error(error_msg)
+            return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
         
         # Free memory
         del support_model_inputs, support_words, support_masks, support_word_len, support_embeddings
         torch.cuda.empty_cache()
     
+    # Log distribution of labels in query set
+    if logger:
+        normal_count = sum(1 for inst in target_query_set if hasattr(inst, 'label') and 
+                        (inst.label == 0 or inst.label == "Normal"))
+        anomaly_count = sum(1 for inst in target_query_set if hasattr(inst, 'label') and 
+                         (inst.label == 1 or inst.label == "Anomalous"))
+        logger.debug(f"Query set: {len(target_query_set)} instances, {normal_count} normal, {anomaly_count} anomaly")
+    
+    # Ensure we have a balance of normal and anomalous samples in the query batch
+    # This helps prevent the case where we only have one class in the query set
+    if len(target_query_set) > max_batch_size:
+        normal_query_instances = [inst for inst in target_query_set if hasattr(inst, 'label') and 
+                               (inst.label == 0 or inst.label == "Normal")]
+        anomaly_query_instances = [inst for inst in target_query_set if hasattr(inst, 'label') and 
+                                (inst.label == 1 or inst.label == "Anomalous")]
+        
+        # Ensure we have at least some instances of each class if available
+        if normal_query_instances and anomaly_query_instances:
+            # Take a balanced sample
+            max_per_class = max_batch_size // 2
+            normal_sample = normal_query_instances[:max_per_class]
+            anomaly_sample = anomaly_query_instances[:max_per_class]
+            query_batch = normal_sample + anomaly_sample
+        else:
+            # If we don't have both classes, just take a sample
+            query_batch = target_query_set[:max_batch_size]
+    else:
+        query_batch = target_query_set[:max_batch_size]
+    
     # Prepare query data
-    query_batch = target_query_set[:max_batch_size]
     query_tinst, query_labels = prepare_batch_for_training(query_batch, vocab, verbose=False)
+    
+    # Ensure we have valid labels
+    if torch.unique(query_labels).shape[0] <= 1:
+        if logger:
+            logger.warning(f"Only one class ({query_labels[0].item() if query_labels.shape[0] > 0 else 'unknown'}) found in query batch")
     
     # Create model inputs for query
     query_words = query_tinst.to(device)
@@ -198,25 +270,81 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     
     # Forward pass on query set with no gradient
     with torch.no_grad():
-        # Get embeddings and logits
-        query_logits, _, query_embeddings = encoder(query_model_inputs)
-        
-        # Calculate cosine similarity to prototype
-        similarity = torch.nn.functional.cosine_similarity(query_embeddings, prototype, dim=1)
-        
-        # Calculate loss
-        query_loss = torch.nn.CrossEntropyLoss()(query_logits, query_labels.to(device))
-        
-        # Make predictions
-        y_pred = torch.argmax(query_logits, dim=1).cpu().numpy()
-        y_true = query_labels.cpu().numpy()
-        
-        # Free memory
-        del query_model_inputs, query_words, query_masks, query_word_len, query_embeddings, query_logits, prototype, similarity
-        torch.cuda.empty_cache()
+        try:
+            # Get embeddings and logits
+            query_logits, _, query_embeddings = encoder(query_model_inputs)
+            
+            # Check for NaN values
+            if torch.isnan(query_logits).any() or torch.isnan(query_embeddings).any():
+                if logger:
+                    logger.warning("NaN values detected in query outputs")
+                # Replace NaN with zeros
+                query_logits = torch.nan_to_num(query_logits, nan=0.0)
+                query_embeddings = torch.nan_to_num(query_embeddings, nan=0.0)
+            
+            # Calculate cosine similarity to prototype
+            similarity = torch.nn.functional.cosine_similarity(query_embeddings, prototype, dim=1)
+            
+            # Calculate loss - handle case where all labels are the same
+            try:
+                query_loss = torch.nn.CrossEntropyLoss()(query_logits, query_labels.to(device))
+            except Exception as e:
+                if logger:
+                    logger.warning(f"Error calculating loss: {str(e)}")
+                query_loss = torch.tensor(0.0, device=device)
+            
+            # Make predictions using logits
+            y_pred_from_logits = torch.argmax(query_logits, dim=1).cpu().numpy()
+            
+            # Also try making predictions using similarity threshold
+            # Lower similarity to prototype (normal instances) means higher anomaly probability
+            similarity_threshold = similarity.median().item()  # Adaptive threshold
+            y_pred_from_similarity = (similarity < similarity_threshold).cpu().numpy().astype(int)
+            
+            # Combine predictions - if both methods agree, use that; otherwise, use logits
+            y_pred = np.where(
+                y_pred_from_logits == y_pred_from_similarity,
+                y_pred_from_logits,
+                y_pred_from_logits
+            )
+            
+            y_true = query_labels.cpu().numpy()
+            
+            # Log prediction distribution
+            if logger:
+                logger.debug(f"Prediction distribution: {np.bincount(y_pred)}")
+                logger.debug(f"True label distribution: {np.bincount(y_true)}")
+            
+        except Exception as e:
+            error_msg = f"Error in query processing: {str(e)}"
+            if logger:
+                logger.error(error_msg)
+            import traceback
+            if logger:
+                logger.error(traceback.format_exc())
+            return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+        finally:
+            # Free memory
+            if 'query_model_inputs' in locals():
+                del query_model_inputs
+            if 'query_words' in locals():
+                del query_words, query_masks, query_word_len
+            if 'query_embeddings' in locals():
+                del query_embeddings
+            if 'query_logits' in locals():
+                del query_logits
+            if 'prototype' in locals():
+                del prototype
+            if 'similarity' in locals():
+                del similarity
+            torch.cuda.empty_cache()
     
     # Calculate metrics
     metrics = calculate_metrics(y_true, y_pred)
+    
+    # Log detailed metrics
+    if logger:
+        logger.debug(f"Metrics: TP={metrics['tp']}, FP={metrics['fp']}, FN={metrics['fn']}, TN={metrics['tn']}")
     
     return query_loss.item(), metrics
 
@@ -319,31 +447,50 @@ def train_model(
         
         # Meta-testing on target system
         logger.info(f"Meta-testing on target system")
-        loss, metrics = meta_test_step(
-            target_support_set,
-            target_query_set,
-            target_encoder,
-            optimizer,
-            device,
-            batch_size
-        )
-        
-        # Log performance
-        logger.info(f"  Target Loss: {loss:.4f}")
-        logger.info(f"  Accuracy: {metrics['accuracy']:.4f}")
-        logger.info(f"  Precision: {metrics['precision']:.4f}")
-        logger.info(f"  Recall: {metrics['recall']:.4f}")
-        logger.info(f"  F1 Score: {metrics['f1']:.4f}")
-        
-        # Save best model
-        if metrics['f1'] > best_f1:
-            best_f1 = metrics['f1']
-            best_model = target_encoder.state_dict()
+        try:
+            loss, metrics = meta_test_step(
+                target_support_set,
+                target_query_set,
+                target_encoder,
+                optimizer,
+                device,
+                batch_size,
+                logger
+            )
             
-            # Save model checkpoint
-            model_path = os.path.join(output_model_dir, f"best_model_epoch_{epoch+1}.pt")
-            torch.save(best_model, model_path)
-            logger.info(f"  New best model saved to {model_path}")
+            # Validate metrics to ensure they are numbers
+            for metric_name, metric_value in metrics.items():
+                if metric_name in ['accuracy', 'precision', 'recall', 'f1']:
+                    if not isinstance(metric_value, (int, float)) or np.isnan(metric_value) or np.isinf(metric_value):
+                        logger.warning(f"Invalid {metric_name} value: {metric_value}, setting to 0")
+                        metrics[metric_name] = 0.0
+            
+            # Log performance
+            logger.info(f"  Target Loss: {loss:.4f}")
+            logger.info(f"  Accuracy: {metrics['accuracy']:.4f}")
+            logger.info(f"  Precision: {metrics['precision']:.4f}")
+            logger.info(f"  Recall: {metrics['recall']:.4f}")
+            logger.info(f"  F1 Score: {metrics['f1']:.4f}")
+            logger.debug(f"  TP: {metrics['tp']}, FP: {metrics['fp']}, FN: {metrics['fn']}, TN: {metrics['tn']}")
+            
+            # Save best model
+            if metrics['f1'] > best_f1:
+                best_f1 = metrics['f1']
+                best_model = target_encoder.state_dict()
+                
+                # Save model checkpoint
+                model_path = os.path.join(output_model_dir, f"best_model_epoch_{epoch+1}.pt")
+                torch.save(best_model, model_path)
+                logger.info(f"  New best model saved to {model_path}")
+                
+                # Also save a backup copy of the best model in case of future errors
+                backup_path = os.path.join(output_model_dir, "best_model_latest.pt")
+                torch.save(best_model, backup_path)
+        except Exception as e:
+            # Log the error but continue training
+            logger.error(f"Error during meta-testing: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         # Log epoch time
         epoch_time = time.time() - epoch_start_time

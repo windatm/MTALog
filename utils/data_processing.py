@@ -110,7 +110,7 @@ def aggregate_sequence_embeddings(sequence_embeddings):
     # Simple mean pooling
     return np.mean(sequence_embeddings, axis=0)
 
-def prepare_batch_for_training(logs, vocab, max_length=100):
+def prepare_batch_for_training(logs, vocab, max_length=100, verbose=False):
     """Prepare a batch of logs for training"""
     # Convert log templates to indices
     sequences = []
@@ -118,29 +118,32 @@ def prepare_batch_for_training(logs, vocab, max_length=100):
     
     # Input validation
     if logs is None or len(logs) == 0:
-        print("Warning: Empty log batch provided to prepare_batch_for_training")
+        if verbose:
+            print("Warning: Empty log batch provided to prepare_batch_for_training")
         return torch.zeros((1, max_length), dtype=torch.long), torch.zeros(1, dtype=torch.long)
     
     if vocab is None:
-        print("Warning: No vocab provided to prepare_batch_for_training")
+        if verbose:
+            print("Warning: No vocab provided to prepare_batch_for_training")
         return torch.zeros((len(logs), max_length), dtype=torch.long), torch.zeros(len(logs), dtype=torch.long)
     
     # Print diagnostics about the first log
-    first_log = logs[0]
-    print(f"Log type: {type(first_log).__name__}")
-    print(f"Log attributes: {dir(first_log)}")
-    print(f"Has template_ids: {hasattr(first_log, 'template_ids')}")
-    print(f"Has sequence: {hasattr(first_log, 'sequence')}")
-    if hasattr(first_log, 'sequence'):
-        print(f"Sequence type: {type(first_log.sequence).__name__}")
-        print(f"Sequence length: {len(first_log.sequence)}")
-        if len(first_log.sequence) > 0:
-            print(f"First sequence item: {first_log.sequence[0]}")
-    
-    # Print vocab info
-    print(f"Vocab type: {type(vocab).__name__}")
-    print(f"Has template_to_idx: {hasattr(vocab, 'template_to_idx')}")
-    print(f"Has word2id: {hasattr(vocab, 'word2id')}")
+    if verbose:
+        first_log = logs[0]
+        print(f"Log type: {type(first_log).__name__}")
+        print(f"Log attributes: {dir(first_log)}")
+        print(f"Has template_ids: {hasattr(first_log, 'template_ids')}")
+        print(f"Has sequence: {hasattr(first_log, 'sequence')}")
+        if hasattr(first_log, 'sequence'):
+            print(f"Sequence type: {type(first_log.sequence).__name__}")
+            print(f"Sequence length: {len(first_log.sequence)}")
+            if len(first_log.sequence) > 0:
+                print(f"First sequence item: {first_log.sequence[0]}")
+        
+        # Print vocab info
+        print(f"Vocab type: {type(vocab).__name__}")
+        print(f"Has template_to_idx: {hasattr(vocab, 'template_to_idx')}")
+        print(f"Has word2id: {hasattr(vocab, 'word2id')}")
     
     for log in logs:
         # Get sequence from log
@@ -152,7 +155,8 @@ def prepare_batch_for_training(logs, vocab, max_length=100):
             template_sequence = log.sequence
         else:
             # If no sequence information is available, use an empty sequence
-            print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no template_ids or sequence")
+            if verbose:
+                print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no template_ids or sequence")
             template_sequence = []
         
         # Convert to vocab indices - use template_to_idx if available, otherwise word2id
@@ -163,7 +167,8 @@ def prepare_batch_for_training(logs, vocab, max_length=100):
                 # Fall back to word2id method if template_to_idx doesn't exist
                 sequence = [vocab.word2id(str(template)) for template in template_sequence]
         except Exception as e:
-            print(f"Error converting templates to indices: {str(e)}")
+            if verbose:
+                print(f"Error converting templates to indices: {str(e)}")
             # Use default indices (0) if conversion fails
             sequence = [0] * min(len(template_sequence), max_length)
         
@@ -189,10 +194,12 @@ def prepare_batch_for_training(logs, vocab, max_length=100):
                 labels.append(int(log.label))
         else:
             # Default to normal (0) if no label is available
-            print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no label")
+            if verbose:
+                print(f"Warning: Log ID {getattr(log, 'id', 'unknown')} has no label")
             labels.append(0)
     
-    print(f"Prepared {len(sequences)} sequences with length {max_length}")
+    if verbose:
+        print(f"Prepared {len(sequences)} sequences with length {max_length}")
     return torch.tensor(sequences), torch.tensor(labels)
 
 def calculate_metrics(y_true, y_pred):

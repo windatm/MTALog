@@ -54,8 +54,9 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         if vocab is None:
             raise AttributeError("No vocab found in encoder or support set. Cannot proceed with training.")
     
-    # Ensure vocab has template_to_idx method
-    vocab = ensure_vocab_has_template_to_idx(vocab)
+    # Ensure vocab has template_to_idx method - silently add if needed
+    if not hasattr(vocab, 'template_to_idx'):
+        vocab.template_to_idx = lambda template: vocab.word2id(str(template))
     
     # Process in smaller chunks to save memory
     max_batch_size = min(batch_size, 32)  # Reduced batch size
@@ -65,7 +66,7 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     query_data = source_query_set[:max_batch_size]
     
     # Prepare support data
-    support_tinst, support_labels = prepare_batch_for_training(support_data, vocab)
+    support_tinst, support_labels = prepare_batch_for_training(support_data, vocab, verbose=False)
     
     # Create model inputs
     support_words = support_tinst.to(device)
@@ -98,7 +99,7 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     torch.cuda.empty_cache()
     
     # Prepare query data
-    query_tinst, query_labels = prepare_batch_for_training(query_data, vocab)
+    query_tinst, query_labels = prepare_batch_for_training(query_data, vocab, verbose=False)
     
     # Create model inputs for query
     query_words = query_tinst.to(device)
@@ -149,8 +150,9 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         if vocab is None:
             raise AttributeError("No vocab found in encoder or support set. Cannot proceed with testing.")
     
-    # Ensure vocab has template_to_idx method
-    vocab = ensure_vocab_has_template_to_idx(vocab)
+    # Ensure vocab has template_to_idx method - silently add if needed
+    if not hasattr(vocab, 'template_to_idx'):
+        vocab.template_to_idx = lambda template: vocab.word2id(str(template))
     
     # Process in smaller chunks to save memory
     max_batch_size = min(batch_size, 32)  # Reduced batch size
@@ -164,7 +166,7 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         normal_support_set = target_support_set[:max_batch_size]
     
     # Prepare support data
-    support_tinst, support_labels = prepare_batch_for_training(normal_support_set, vocab)
+    support_tinst, support_labels = prepare_batch_for_training(normal_support_set, vocab, verbose=False)
     
     # Create model inputs
     support_words = support_tinst.to(device)
@@ -186,7 +188,7 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     
     # Prepare query data
     query_batch = target_query_set[:max_batch_size]
-    query_tinst, query_labels = prepare_batch_for_training(query_batch, vocab)
+    query_tinst, query_labels = prepare_batch_for_training(query_batch, vocab, verbose=False)
     
     # Create model inputs for query
     query_words = query_tinst.to(device)

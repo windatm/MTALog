@@ -1,65 +1,182 @@
-﻿# MTALog: Generalizable Cross-System Anomaly Detection from Logs with Meta-Learning
+﻿# MTALog: Meta-Transfer Learning for Log Anomaly Detection
+
+MTALog is a Python implementation of a meta-transfer learning approach for log anomaly detection. The system allows for efficient few-shot learning on new log systems by transferring knowledge from source systems.
+
+## Overview
+
+Log anomaly detection is a critical task in system monitoring, but traditional methods require large amounts of labeled data for each new system. MTALog addresses this challenge by:
+
+1. Using meta-learning to extract knowledge from source log systems
+2. Transferring this knowledge to target systems with limited labeled data
+3. Providing efficient few-shot learning capabilities
+
+## Features
+
+- **Meta-learning framework**: Learns across multiple log systems
+- **GRU-based log sequence encoding**: Effective representation of log patterns
+- **Few-shot learning**: Requires minimal labeled examples for new systems
+- **Transfer learning**: Knowledge transfer between different log systems
+- **Support for multiple log parsers**: Compatible with IBM, Drain, and Spell parsers
+- **Command-line interface**: Easy to use for training, evaluation, and prediction
+
+## Installation
+
+### Prerequisites
+
+- Python 3.6+
+- PyTorch 1.7+
+
+### Setup
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/username/MTALog.git
+cd MTALog
+```
+
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Download word embeddings (GloVe):
+
+```bash
+# For example, download GloVe embeddings
+wget https://nlp.stanford.edu/data/glove.6B.zip
+unzip glove.6B.zip
+```
 
 ## Project Structure
 
 ```
-├─approaches  # MTALog main entrance.
-├─conf      # Configuration for Drain
-├─entities    # Instances for log data and DL model.
-├─utils
-├─logs
-├─datasets
-├─models      # Attention-based GRU.
-├─module      # Anomaly detection modules, including classifier, Attention, etc.
-├─outputs
-├─parsers     # Drain parser.
-├─preprocessing # Preprocessing code, data loaders and cutters.
-├─representations # Log template and sequence representation.
-└─util        # Vocab for DL model and some other common utils.
+MTALog/
+├── models/             # Neural network model implementations
+├── module/             # Core modules for the system
+├── preprocessing/      # Log preprocessing and parsing
+├── representations/    # Template representation methods
+├── utils/              # Utility functions
+├── conf/               # Configuration files for log parsers
+├── datasets/           # Log datasets directory
+├── logs/               # System logs directory
+├── outputs/            # Output files directory
+├── main.py             # Main implementation
+├── run.py              # Command-line interface
+├── training.py         # Training and evaluation functions
+├── CONSTANTS.py        # System constants
+└── requirements.txt    # Project dependencies
 ```
 
-## Datasets
+## Usage
 
-We used `2` open-source log datasets, HDFS and BGL.
+### Training
 
-| Software System | Description                        | Time Span  | # Messages | Data Size | Link                                                      |
-| --------------- | ---------------------------------- | ---------- | ---------- | --------- | --------------------------------------------------------- |
-| HDFS            | Hadoop distributed file system log | 38.7 hours | 11,175,629 | 1.47 GB   | [LogHub](https://github.com/logpai/loghub)                |
-| BGL             | Blue Gene/L supercomputer log      | 214.7 days | 4,747,963  | 708.76MB  | [Usenix-CFDR Data](https://www.usenix.org/cfdr-data#hpc4) |
+To train the model on source systems and adapt to a target system:
 
-## Environment
+```bash
+python run.py --mode train \
+    --source_systems HDFS OpenStack \
+    --target_system BGL \
+    --parser IBM \
+    --epochs 5 \
+    --batch_size 1024 \
+    --few_shot_ratio 0.1
+```
 
-Please refer to the `requirements.txt` file for package installation.
+### Evaluation
 
-**Key Packages:**
+To evaluate a trained model on a target system:
 
-PyTorch v1.10.1
+```bash
+python run.py --mode eval \
+    --target_system BGL \
+    --model_path outputs/models/IBM/best_model_epoch_5.pt
+```
 
-python v3.8.3
+### Prediction
 
-hdbscan v0.8.27
+To use a trained model for anomaly detection on new logs:
 
-overrides v6.1.0
+```bash
+python run.py --mode predict \
+    --target_system BGL \
+    --model_path outputs/models/IBM/best_model_epoch_5.pt
+```
 
-scikit-learn v0.24
+### Command-line Arguments
 
-tqdm
+| Argument               | Description                             | Default           |
+| ---------------------- | --------------------------------------- | ----------------- |
+| `--mode`               | Operation mode: train, eval, or predict | train             |
+| `--source_systems`     | Source log systems for meta-learning    | HDFS OpenStack    |
+| `--target_system`      | Target log system                       | BGL               |
+| `--parser`             | Log parser to use                       | IBM               |
+| `--hidden_size`        | Hidden size of the GRU encoder          | 64                |
+| `--num_layers`         | Number of GRU layers                    | 4                 |
+| `--dropout`            | Dropout rate                            | 0.5               |
+| `--batch_size`         | Batch size for training                 | 1024              |
+| `--epochs`             | Number of training epochs               | 5                 |
+| `--alpha`              | Inner loop learning rate                | 0.008             |
+| `--beta`               | Outer loop scaling factor               | 1.0               |
+| `--gamma`              | Learning rate for optimizer             | 0.008             |
+| `--few_shot_ratio`     | Ratio of normal logs in support set     | 0.1               |
+| `--query_sample_ratio` | Ratio of query set sampled              | 1.0               |
+| `--model_path`         | Path to saved model checkpoint          | None              |
+| `--word2vec_file`      | Word2Vec embeddings file                | glove.6B.300d.txt |
 
-regex
+## Dataset Preparation
 
-[Drain3](https://github.com/IBM/Drain3)
+MTALog expects log datasets to be in specific directories with specific formats:
 
-## Preparation
+1. Place raw log files in `datasets/{system_name}/` directory
+2. Run preprocessing scripts to parse logs
+3. The system will automatically handle the rest
 
-- **Step 1:** To run `MTALog` on different log data, create a directory under `datasets` folder HDFS and BGL.
-- **Step 2:** Move target log file (plain text, each raw contains one log message) into the folder of step 1.
-- **Step 3:** Download `glove.6B.300d.txt` from [Stanford NLP word embeddings](https://nlp.stanford.edu/projects/glove/), and put it under `datasets` folder.
+### Supported Log Systems
 
-## Run
+- HDFS
+- BGL
+- OpenStack
+- Thunderbird
+- (Others can be added with appropriate preprocessors)
 
-- Run `approaches/MTALog.py` (make sure it has proper parameters) for bilateral generalization from HDFS to BGL.
-- Run `approaches/MTALog_BH.py` (make sure it has proper parameters) for bilateral generalization from BGL to HDFS.
+## Configuration
 
-conda create -n mtalog_env python=3.11 
-conda activate mtalog_env
-pip install -r requirements.txts
+Adjust parser configurations in the `conf/` directory for different log systems:
+
+```
+conf/
+├── BGL.ini       # BGL parser configuration
+├── HDFS.ini      # HDFS parser configuration
+└── OpenStack.ini # OpenStack parser configuration
+```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Citation
+
+If you use MTALog in your research, please cite:
+
+```
+@article{mtalog2023,
+  title={MTALog: A Meta-Transfer Learning Approach for Log Anomaly Detection},
+  author={Your Name},
+  journal={Journal Name},
+  year={2023}
+}
+```
+
+## Acknowledgements
+
+- This project is inspired by the research in meta-learning and transfer learning for log analysis
+  conda create -n mtalog_env python=3.11
+  conda activate mtalog_env
+  pip install -r requirements.txts

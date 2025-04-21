@@ -191,3 +191,21 @@ class Template_TF_IDF_without_clean:
         logger.info(f"Total = {len(self.total_words)}, OOV = {len(self.num_oov)}")
         logger.info(f"OOV Rate = {(len(self.num_oov) / len(self.total_words))}")
         return id2embed
+
+    def get_embeddings(self):
+        """
+        Return the loaded word embeddings dictionary.
+        
+        Returns:
+            dict: Dictionary mapping words to their embedding vectors
+        """
+        return self._word2vec
+
+    def get_embedding_dim(self):
+        """
+        Return the dimensionality of the word embeddings.
+        
+        Returns:
+            int: Embedding dimension
+        """
+        return self.vocab_size

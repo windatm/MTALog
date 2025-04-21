@@ -84,7 +84,7 @@ class AttGRUModel(nn.Module):
         self.word_embed.weight.data.copy_(torch.from_numpy(vocab.embeddings))
         # Freezes the embedding weights
         self.word_embed.weight.requires_grad = False
-        self.word_embed = self.word_embed.to(DEVICE)
+        # Do not move word_embed to device here - it will be moved in the to() method
         
         if not is_backup:
             self.logger.info("==== Model Parameters ====")
@@ -113,6 +113,9 @@ class AttGRUModel(nn.Module):
         self.proj = NonLinear(self.sent_dim, 2)
         # Add decoder for reconstruction loss
         self.decoder = MLPDecoder(input_dim=self.sent_dim, output_dim=self.sent_dim)
+        
+        # Move the entire model to the device
+        self.to(DEVICE)
 
     def reset_word_embed_weight(self, vocab, pretrained_embedding):
         """
@@ -146,12 +149,21 @@ class AttGRUModel(nn.Module):
         # words: Tensor of token indices [batch_size, seq_len]
         # masks: Boolean tensor [batch_size, seq_len] indicating valid tokens (used in attention)
         words, masks, word_len = inputs
+        
+        # Ensure all inputs are on the correct device
+        device = next(self.parameters()).device
+        words = words.to(device)
+        masks = masks.to(device)
+        word_len = word_len.to(device)
+        
         # Converts token indices into dense vectors using a fixed pretrained embedding
         embed = self.word_embed(words)
         if self.training:
             embed = drop_input_independent(embed, self.dropout)
 
-        embed = embed.to(DEVICE)
+        # Ensure embeddings are on the correct device
+        embed = embed.to(device)
+        
         batch_size = embed.size(0)
         # Learnable vector used as a query to compute attention over the GRU outputs.
         atten_guide = torch.unsqueeze(self.atten_guide, dim=1).expand(-1, batch_size)

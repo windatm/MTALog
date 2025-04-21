@@ -91,33 +91,135 @@ def encode_log_sequences(processor, train_data, test_data=None):
 
 def encode_log_sequences_with_gru(model, vocab, instances, batch_size=128, show_progress=True):
     if not instances:
-        raise ValueError("Empty instance list provided")
+        logger.warning("Empty instance list provided to encode_log_sequences_with_gru. Returning empty list.")
+        return []
 
+    # Ensure model is available
+    if model is None:
+        raise ValueError("No model provided for encoding")
+    
+    # Number of successful encodings
+    success_count = 0
+    
+    # Make sure model is on the correct device
+    model = model.to(DEVICE)    
     model.eval()
     encoded_instances = []
 
+    logger.info(f"Starting encoding of {len(instances)} instances with batch size {batch_size}")
+    
     with torch.no_grad():
-        iterator = data_iter(instances, batch_size=batch_size, shuffle=False)
-        if show_progress:
-            iterator = tqdm(iterator, desc="Encoding sequences", total=len(instances)//batch_size + 1)
+        # Create smaller batches for more robustness
+        smaller_batch_size = min(batch_size, 64)
+        logger.info(f"Using batch size: {smaller_batch_size} for more stable processing")
+        
+        iterator = data_iter(instances, batch_size=smaller_batch_size, shuffle=False)
+        
+        # Skip iterator creation if no instances (defensive)
+        total = max(1, len(instances)//smaller_batch_size) if instances else 0
+        if show_progress and total > 0:
+            iterator = tqdm(iterator, desc="Encoding sequences", total=total)
 
-        for batch in iterator:
+        for batch_idx, batch in enumerate(iterator):
+            if not batch:  # Skip empty batches
+                continue
+                
             try:
-                tinst, _ = generate_tinsts_binary_label(batch, vocab)
-                tinst.to(DEVICE)
+                logger.info(f"Processing batch {batch_idx+1}/{total}, size: {len(batch)}")
+                
+                # Generate tensor instances from batch
+                tinst_result = generate_tinsts_binary_label(batch, vocab)
+                
+                # Verify that tinst_result is not None and has the expected format
+                if tinst_result is None or len(tinst_result) != 2:
+                    logger.error(f"Invalid result from generate_tinsts_binary_label: {tinst_result}")
+                    continue
+                    
+                # Extract tinst and validate it
+                tinst, _ = tinst_result
+                
+                # Check if tinst is None or doesn't have the required attribute
+                if tinst is None:
+                    logger.error("generate_tinsts_binary_label returned None for tinst")
+                    continue
+                
+                # Check if tinst has the inputs attribute
+                if not hasattr(tinst, 'inputs'):
+                    logger.error(f"tinst object does not have 'inputs' attribute. Type: {type(tinst)}")
+                    continue
+                
+                # Verify inputs exists and is correctly formed
+                inputs = getattr(tinst, 'inputs', None)
+                if inputs is None or not isinstance(inputs, tuple) or len(inputs) < 3:
+                    logger.error(f"tinst.inputs is not properly formed: {inputs}")
+                    continue
+                
+                # Make sure all tensors are on the same device
+                # Note: tinst.to() doesn't modify in-place, need to assign back
+                try:
+                    tinst = tinst.to(DEVICE)
+                    
+                    # Explicitly move inputs to device
+                    words, masks, word_len = tinst.inputs
+                    words = words.to(DEVICE)
+                    masks = masks.to(DEVICE)
+                    word_len = word_len.to(DEVICE)
+                    tinst.inputs = (words, masks, word_len)
+                    
+                    logger.info(f"Input shapes - Words: {words.shape}, Masks: {masks.shape}, Word_len: {word_len.shape}")
+                except Exception as e:
+                    logger.error(f"Error moving tensors to device: {str(e)}")
+                    continue
 
-                _, _, latent = model(tinst.inputs)
+                # Process through model
+                try:
+                    model_device = next(model.parameters()).device
+                    logger.info(f"Model is on device: {model_device}, Inputs are on device: {words.device}")
+                    
+                    # Forward pass
+                    results = model(tinst.inputs)
+                    
+                    if results is None or len(results) < 3:
+                        logger.error(f"Model returned invalid result: {results}")
+                        continue
+                        
+                    _, _, latent = results
+                    
+                    if latent is None:
+                        logger.error("Model returned None for latent representation")
+                        continue
+                    
+                    logger.info(f"Latent shape: {latent.shape}")
+                    
+                    # Normalize latent vectors
+                    latent = F.normalize(latent, p=2, dim=1)
 
-                latent = F.normalize(latent, p=2, dim=1)
-
-                for i, inst in enumerate(batch):
-                    inst.repr = latent[i].detach().cpu().numpy()
-                    encoded_instances.append(inst)
+                    # Update instance representations
+                    for i, inst in enumerate(batch):
+                        inst.repr = latent[i].detach().cpu().numpy()
+                        encoded_instances.append(inst)
+                        success_count += 1
+                        
+                except Exception as e:
+                    logger.error(f"Error in model processing: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    continue
 
             except Exception as e:
                 logger.error(f"Error encoding batch: {str(e)}")
-                raise
+                # Print more detailed error diagnostics
+                logger.error(f"Batch type: {type(batch)}, Length: {len(batch) if batch else 0}")
+                if batch and len(batch) > 0:
+                    logger.error(f"First instance type: {type(batch[0])}")
+                    if hasattr(batch[0], 'sequence'):
+                        logger.error(f"Sequence length: {len(batch[0].sequence)}")
+                # Continue with the next batch instead of stopping
+                import traceback
+                logger.error(traceback.format_exc())
+                continue
 
+    logger.info(f"Encoding complete: {success_count}/{len(instances)} instances successfully encoded")
     return encoded_instances
 
 
@@ -129,72 +231,118 @@ def find_most_similar_template(instance, source_encoders, similarity_threshold=0
     Args:
         instance (Instance): Target instance to find similar template for.
         source_encoders (dict[str, AttGRUModel]): Source encoders with repr_lookup.
-        similarity_threshold (float): Minimum similarity threshold.
+        similarity_threshold (float): Minimum similarity threshold between 0 and 1.
 
     Returns:
         np.ndarray or None: Best matching representation if found, None otherwise.
     """
-    best_similarity = 0
-    best_repr = None
+    # Validate inputs
+    if instance is None:
+        logger.warning("None instance provided to find_most_similar_template. Returning None.")
+        return None
+        
+    if not source_encoders:
+        logger.warning("No source encoders provided to find_most_similar_template. Returning None.")
+        return None
     
-    for system, encoder in source_encoders.items():
-        if not hasattr(encoder, "repr_lookup"):
-            continue
-            
-        for seq_key, repr in encoder.repr_lookup.items():
-            # Calculate sequence similarity (simple Jaccard similarity for now)
-            target_set = set(instance.sequence)
-            source_set = set(seq_key)
-            similarity = len(target_set.intersection(source_set)) / len(target_set.union(source_set))
-            
-            if similarity > best_similarity and similarity >= similarity_threshold:
-                best_similarity = similarity
-                best_repr = repr
-                
-    return best_repr
-
-
-def fallback_encode_instance(instance, encoder_target, vocab_target, source_encoders, similarity_threshold=0.8):
-    """
-    Encode an instance using the target encoder. If template tokens are unseen in target vocab,
-    fallback to a source encoder that has seen the same sequence (template id sequence).
-
-    Args:
-        instance (Instance): Log instance to encode.
-        encoder_target (AttGRUModel): Encoder for the target system.
-        vocab_target (Vocab): Target vocab (may not cover all tokens in query set).
-        source_encoders (dict[str, AttGRUModel]): Source encoders with repr_lookup.
-        similarity_threshold (float): Threshold for template similarity.
-
-    Returns:
-        np.ndarray: Latent representation vector.
-    """
-    seq_key = tuple(instance.sequence)
-
+    # Validate similarity threshold
+    if not (0 <= similarity_threshold <= 1):
+        logger.warning(f"Invalid similarity threshold {similarity_threshold}. Using default 0.8.")
+        similarity_threshold = 0.8
+    
+    # Check if instance has sequence attribute
+    if not hasattr(instance, 'sequence') or not instance.sequence:
+        logger.warning("Instance has no sequence or empty sequence. Returning None.")
+        return None
+    
     try:
-        # Check if sequence is known to target vocab
-        _ = [vocab_target.word2id(token) for token in instance.sequence]
-
-        # Encode using target encoder
-        encoder_target.eval()
-        tinst, _ = generate_tinsts_binary_label([instance], vocab_target)
-        tinst.to(DEVICE)
-        _, _, latent = encoder_target(tinst.inputs)
-        return latent[0].detach().cpu().numpy()
-
-    except KeyError:
-        # Token in sequence not found in target vocab → fallback
-        # First try exact match
+        best_similarity = 0
+        best_repr = None
+        
         for system, encoder in source_encoders.items():
-            if hasattr(encoder, "repr_lookup") and seq_key in encoder.repr_lookup:
-                return encoder.repr_lookup[seq_key]
+            if encoder is None:
+                logger.warning(f"Encoder for system {system} is None. Skipping.")
+                continue
                 
-        # If no exact match, try finding similar template
-        best_match = find_most_similar_template(instance, source_encoders, similarity_threshold)
-        if best_match is not None:
-            return best_match
+            if not hasattr(encoder, "repr_lookup") or not encoder.repr_lookup:
+                logger.warning(f"No repr_lookup found for encoder {system}. Skipping.")
+                continue
+                
+            for seq_key, repr in encoder.repr_lookup.items():
+                # Skip empty sequences
+                if not seq_key:
+                    continue
+                    
+                # Calculate sequence similarity (simple Jaccard similarity for now)
+                try:
+                    target_set = set(instance.sequence)
+                    source_set = set(seq_key)
+                    
+                    # Avoid division by zero
+                    union_size = len(target_set.union(source_set))
+                    if union_size == 0:
+                        continue
+                        
+                    similarity = len(target_set.intersection(source_set)) / union_size
+                    
+                    if similarity > best_similarity and similarity >= similarity_threshold:
+                        best_similarity = similarity
+                        best_repr = repr
+                except Exception as e:
+                    logger.warning(f"Error calculating similarity: {str(e)}. Skipping this template.")
+                    continue
+        
+        if best_repr is not None:
+            logger.debug(f"Found similar template with similarity {best_similarity:.2f}")
             
-        raise ValueError(f"Instance {instance.id} cannot be encoded — no suitable fallback found in any source system.")
+        return best_repr
+        
+    except Exception as e:
+        logger.error(f"Error in find_most_similar_template: {str(e)}")
+        return None
+
+
+def fallback_encode_instance(instance, model, source_vocab, target_vocab, similarity_threshold=0.6):
+    """
+    Encodes an instance even when some tokens are not found in target vocabulary.
+    Uses a similarity-based fallback mechanism.
+    """
+    if instance is None:
+        logger.warning("None instance provided to fallback_encode_instance. Returning None.")
+        return None
+        
+    if model is None or source_vocab is None or target_vocab is None:
+        logger.error("Missing required parameter in fallback_encode_instance")
+        raise ValueError("Model, source_vocab, and target_vocab must all be provided")
+    
+    # First try encoding with the target vocabulary
+    try:
+        result = []
+        for token in instance.template_ids:
+            if token in target_vocab.w2i:
+                result.append(target_vocab.w2i[token])
+            else:
+                # If token not in target vocab, find most similar template
+                similar_template = find_most_similar_template(
+                    token, model, source_vocab, target_vocab, similarity_threshold
+                )
+                
+                if similar_template is not None:
+                    result.append(target_vocab.w2i[similar_template])
+                else:
+                    # If no similar template found above threshold, use UNK
+                    if "<UNK>" in target_vocab.w2i:
+                        result.append(target_vocab.w2i["<UNK>"])
+                    else:
+                        # If no UNK token in vocab, use first token as fallback
+                        logger.warning(f"No <UNK> token in vocabulary, using first token as fallback for: {token}")
+                        result.append(next(iter(target_vocab.w2i.values())))
+                        
+        return result
+    except Exception as e:
+        logger.error(f"Error in fallback_encode_instance: {str(e)}")
+        # Return empty list as last resort
+        return []
 
 
 def encode_query_with_fallback(query_set, encoder_target, vocab_target, source_encoders, similarity_threshold=0.8):

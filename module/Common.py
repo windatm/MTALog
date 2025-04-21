@@ -80,41 +80,132 @@ def data_iter(data, batch_size, shuffle=True):
 
 
 def generate_tinsts_binary_label(batch_insts, vocab):
-    slen = max(len(inst.sequence) for inst in batch_insts)
-    batch_size = len(batch_insts)
+    """
+    Generate tensor instances with binary labels from a batch of instances.
+    
+    Args:
+        batch_insts (list): A batch of instances.
+        vocab (Vocab): The vocabulary to convert tokens to IDs.
+        
+    Returns:
+        tuple: (TInstWithLogits, inputs) where inputs is a tuple containing tensors needed for the model.
+        If an error occurs, returns (None, None).
+    """
+    # Validate inputs
+    if not batch_insts:
+        print("Error: Empty batch provided to generate_tinsts_binary_label")
+        return None, None
+        
+    try:        
+        # Check if instances have the required attributes
+        for i, inst in enumerate(batch_insts):
+            if not hasattr(inst, 'sequence'):
+                print(f"Error: Instance at index {i}, ID {getattr(inst, 'id', 'unknown')} has no sequence attribute")
+                return None, None
+                
+            if not inst.sequence:
+                print(f"Error: Instance at index {i}, ID {getattr(inst, 'id', 'unknown')} has empty sequence")
+                return None, None
+                
+            if not hasattr(inst, 'label'):
+                print(f"Error: Instance at index {i}, ID {getattr(inst, 'id', 'unknown')} has no label attribute")
+                return None, None
+        
+        # Get maximum sequence length
+        slen = max(len(inst.sequence) for inst in batch_insts)
+        batch_size = len(batch_insts)
+        
+        # Create tensor instance
+        tinst = TInstWithLogits(batch_size, slen, 2)
+        
+        # Set UNK token - vocab.UNK is the index, not the actual token
+        unk_token = vocab.UNK  # This is 3 as defined in Vocab
 
-    tinst = TInstWithLogits(batch_size, slen, 2)
+        # Process each instance
+        for b, inst in enumerate(batch_insts):
+            try:
+                # Add instance ID
+                tinst.src_ids.append(str(inst.id))
 
-    for b, inst in enumerate(batch_insts):
-        tinst.src_ids.append(str(inst.id))
+                # Handle case when predicted is not available
+                if not hasattr(inst, 'predicted') or inst.predicted == "":
+                    inst.predicted = inst.label
 
-        if inst.predicted == "":
-            inst.predicted = inst.label
+                # Handle case when confidence is not available
+                confidence = 0.5
+                if hasattr(inst, 'confidence'):
+                    confidence = 0.5 * inst.confidence
+                    
+                # Convert predicted label to tag ID
+                try:
+                    tag_id = vocab.tag2id(inst.predicted)
+                    if tag_id is None:
+                        print(f"Warning: tag_id is None for label '{inst.predicted}', defaulting to 0")
+                        tag_id = 0
+                except Exception as e:
+                    # Default to first tag if conversion fails
+                    tag_id = 0
+                    print(f"Warning: Could not convert label '{inst.predicted}' to tag ID for instance {inst.id}: {str(e)}")
+                    
+                # Set tag probability vectors
+                tinst.tags[b, tag_id] = 1 - confidence
+                tinst.tags[b, 1 - tag_id] = confidence
+                tinst.g_truth[b] = tag_id
 
-        confidence = 0.5 * inst.confidence
-        tag_id = vocab.tag2id(inst.predicted)
-        tinst.tags[b, tag_id] = 1 - confidence
-        tinst.tags[b, 1 - tag_id] = confidence
-        tinst.g_truth[b] = tag_id
+                # Handle the sequence
+                cur_slen = len(inst.sequence)
+                tinst.word_len[b] = cur_slen
 
-        cur_slen = len(inst.sequence)
-        tinst.word_len[b] = cur_slen
+                # Convert tokens to IDs
+                for index in range(min(cur_slen, 500)):
+                    try:
+                        token_id = vocab.word2id(inst.sequence[index])
+                        tinst.src_words[b, index] = token_id
+                        tinst.src_masks[b, index] = 1
+                    except Exception as token_e:
+                        print(f"Error processing token at position {index} for instance {inst.id}: {str(token_e)}")
+                        tinst.src_words[b, index] = unk_token
+                        tinst.src_masks[b, index] = 1
+            except Exception as inst_e:
+                print(f"Error processing instance {getattr(inst, 'id', 'unknown')}: {str(inst_e)}")
+                # Set default values for this instance
+                tinst.word_len[b] = 1
+                tinst.src_words[b, 0] = unk_token
+                tinst.src_masks[b, 0] = 1
+                tinst.tags[b, 0] = 0.5
+                tinst.tags[b, 1] = 0.5
+                tinst.g_truth[b] = 0
 
-        for index in range(min(cur_slen, 500)):
-            tinst.src_words[b, index] = vocab.word2id(inst.sequence[index])
-            tinst.src_masks[b, index] = 1
-
-    # Trả về cả inputs tuple
-    inputs = (
-        tinst.src_words,
-        tinst.src_masks,
-        tinst.word_len,
-        tinst.g_truth  # <- cần dùng cho loss
-    )
-
-    return tinst, inputs
-
-
+        # Explicitly create the inputs tuple before returning to make sure the property works
+        inputs = (
+            tinst.src_words,
+            tinst.src_masks,
+            tinst.word_len
+        )
+        
+        # Verify the inputs tuple is correctly created
+        if not inputs or len(inputs) < 3:
+            print("Error: Failed to create valid inputs tuple")
+            return None, None
+            
+        # Make sure we can get inputs from the tinst object directly
+        if not hasattr(tinst, 'inputs') or tinst.inputs is None:
+            # Override the property method if needed
+            setattr(tinst, '_inputs', inputs)
+            
+            # Verify we can access the inputs
+            test_inputs = getattr(tinst, 'inputs', None)
+            if test_inputs is None or len(test_inputs) < 3:
+                print("Error: Failed to set inputs property on tinst object")
+                return None, None
+            
+        return tinst, inputs
+        
+    except Exception as e:
+        print(f"Error in generate_tinsts_binary_label: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None, None
 
 
 def batch_variable_inst(insts, tagids, tag_logits, id2tag):

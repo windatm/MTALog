@@ -8,5 +8,6 @@
 **/*.log
 datasets/*
 outputs/*
+cache/*
 visualization/graphs/*
 visualization/old-format/*

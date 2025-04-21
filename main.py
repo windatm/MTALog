@@ -137,20 +137,25 @@ def process_source_systems(params, logger, template_encoder):
             with open(combined_cache_file, 'rb') as f:
                 combined_data = pickle.load(f)
                 
-                # Validate that the cache contains valid data
-                is_valid = True
-                for system in params["source_systems"]:
-                    support_set = combined_data.get("source_support_sets", {}).get(system, [])
-                    normal_count = len([x for x in support_set if x.label == 0])
-                    anomaly_count = len([x for x in support_set if x.label == 1])
-                    
-                    if normal_count == 0 and anomaly_count == 0:
-                        logger.warning(f"Cache invalid for {system}. Reprocessing...")
-                        is_valid = False
-                        break
-                
-                if is_valid:
+                # Less strict validation - check only that required keys exist
+                if all(key in combined_data for key in [
+                    "source_processors", "source_vocabularies", "source_encoders", 
+                    "source_support_sets", "source_query_sets", "combined_vocab"
+                ]):
                     logger.info("Using cached source systems data")
+                    
+                    # Ensure repr_lookup exists for each encoder
+                    for system, encoder in combined_data.get("source_encoders", {}).items():
+                        if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
+                            support_set = combined_data.get("source_support_sets", {}).get(system, [])
+                            query_set = combined_data.get("source_query_sets", {}).get(system, [])
+                            
+                            # Initialize repr_lookup if needed
+                            encoder.repr_lookup = {}
+                            for inst in support_set + query_set:
+                                if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
+                                    encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
+                    
                     return combined_data
                 
                 # Delete invalid cache
@@ -187,23 +192,20 @@ def process_source_systems(params, logger, template_encoder):
                     support_set = encoder_cache['support_set']
                     query_set = encoder_cache['query_set']
                 
-                # Rebuild repr_lookup if needed
-                if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
-                    encoder.repr_lookup = {}
-                    # Rebuild from support and query sets
-                    for inst in support_set + query_set:
-                        if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
-                            encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
-                
-                # Validate data has both normal and anomaly logs
-                normal_count = len([x for x in train_data if x.label == 0])
-                anomaly_count = len([x for x in train_data if x.label == 1])
-                
-                if normal_count > 0 or anomaly_count > 0:
-                    logger.info(f"[{source_system}] Loaded from cache: {len(train_data)} instances, {normal_count} normal, {anomaly_count} anomaly")
+                # Validate data exists (less strict)
+                if train_data and hasattr(processor, 'embedding') and vocab:
+                    logger.info(f"[{source_system}] Loaded from cache: {len(train_data)} instances")
+                    
+                    # Rebuild repr_lookup if needed
+                    if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
+                        encoder.repr_lookup = {}
+                        for inst in support_set + query_set:
+                            if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
+                                encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
+                    
                     data_loaded = True
                 else:
-                    logger.warning(f"[{source_system}] Cached data has no valid logs. Reprocessing...")
+                    logger.warning(f"[{source_system}] Cache data validation failed. Reprocessing...")
                     os.remove(data_cache_file)
                     os.remove(encoder_cache_file)
             except Exception as e:
@@ -355,24 +357,21 @@ def process_target_system(params, logger, template_encoder, source_data):
                 query_set = encoder_cache['query_set']
                 support_templates = encoder_cache['support_templates']
             
-            # Rebuild repr_lookup if needed
-            if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
-                encoder.repr_lookup = {}
-                # Rebuild from support and query sets
-                for inst in support_set + query_set:
-                    if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
-                        encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
-            
-            # Validate data has both normal and anomaly logs
-            normal_count = len([x for x in train_data if x.label == 0])
-            anomaly_count = len([x for x in train_data if x.label == 1])
-            
-            if normal_count > 0 or anomaly_count > 0:
-                logger.info(f"[{target_system}] Loaded from cache: {len(train_data)} instances, {normal_count} normal, {anomaly_count} anomaly")
+            # Validate data exists (less strict)
+            if train_data and support_set:
+                logger.info(f"[{target_system}] Loaded from cache: {len(train_data)} instances")
                 logger.info(f"[{target_system}] Support set: {len(support_set)} | Query set: {len(query_set)}")
+                
+                # Ensure the encoder has repr_lookup attribute
+                if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
+                    encoder.repr_lookup = {}
+                    for inst in support_set + query_set:
+                        if hasattr(inst, 'sequence') and hasattr(inst, 'repr'):
+                            encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
+                
                 data_loaded = True
             else:
-                logger.warning(f"[{target_system}] Cached data has no valid logs. Reprocessing...")
+                logger.warning(f"[{target_system}] Cache data validation failed. Reprocessing...")
                 os.remove(data_cache_file)
                 os.remove(encoder_cache_file)
         except Exception as e:

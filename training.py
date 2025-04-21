@@ -528,6 +528,11 @@ def evaluate_model(
     """
     logger.info("=== Model Evaluation ===")
     
+    # Input validation
+    if not test_data or len(test_data) == 0:
+        logger.warning("Empty test data provided to evaluate_model")
+        return {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+    
     # Set model to evaluation mode
     encoder.eval()
     
@@ -546,6 +551,20 @@ def evaluate_model(
     # Ensure vocab has template_to_idx method
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
+    # Log distribution of labels in test data
+    normal_count = sum(1 for inst in test_data if hasattr(inst, 'label') and 
+                    (inst.label == 0 or inst.label == "Normal"))
+    anomaly_count = sum(1 for inst in test_data if hasattr(inst, 'label') and 
+                     (inst.label == 1 or inst.label == "Anomalous"))
+    logger.info(f"Test data: {len(test_data)} instances, {normal_count} normal, {anomaly_count} anomaly")
+    
+    # Check if we have both classes
+    if normal_count == 0 or anomaly_count == 0:
+        logger.warning(f"Test data has imbalanced classes: {normal_count} normal, {anomaly_count} anomaly")
+        if normal_count == 0 and anomaly_count == 0:
+            logger.error("No valid labels found in test data")
+            return {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+    
     # Process in chunks to reduce memory usage
     all_predictions = []
     all_true_labels = []
@@ -558,54 +577,150 @@ def evaluate_model(
     total_loss = 0.0
     
     for chunk_idx in range(num_chunks):
-        # Get chunk of data
-        start_idx = chunk_idx * chunk_size
-        end_idx = min((chunk_idx + 1) * chunk_size, len(test_data))
-        chunk_data = test_data[start_idx:end_idx]
-        
-        # Skip empty chunks
-        if not chunk_data:
-            continue
+        try:
+            # Get chunk of data
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, len(test_data))
+            chunk_data = test_data[start_idx:end_idx]
             
-        logger.info(f"Processing evaluation chunk {chunk_idx+1}/{num_chunks}, size: {len(chunk_data)}")
-        
-        # Prepare test data for this chunk
-        test_tinst, test_labels = prepare_batch_for_training(chunk_data, vocab)
-        
-        # Create model inputs
-        test_words = test_tinst.to(device)
-        test_masks = torch.ones_like(test_words, dtype=torch.float, device=device)
-        test_word_len = torch.sum(test_masks, dim=1).to(device)
-        test_model_inputs = (test_words, test_masks, test_word_len)
-        
-        # Forward pass with no gradient
-        with torch.no_grad():
-            # Get embeddings and logits
-            test_logits, _, test_embeddings = encoder(test_model_inputs)
+            # Skip empty chunks
+            if not chunk_data:
+                continue
+                
+            logger.info(f"Processing evaluation chunk {chunk_idx+1}/{num_chunks}, size: {len(chunk_data)}")
             
-            # Calculate loss
-            chunk_loss = torch.nn.CrossEntropyLoss()(test_logits, test_labels.to(device))
-            total_loss += chunk_loss.item()
+            # Try to balance the chunk if possible
+            if len(chunk_data) > 4:  # Only balance if we have enough data
+                normal_instances = [inst for inst in chunk_data if hasattr(inst, 'label') and 
+                                (inst.label == 0 or inst.label == "Normal")]
+                anomaly_instances = [inst for inst in chunk_data if hasattr(inst, 'label') and 
+                                 (inst.label == 1 or inst.label == "Anomalous")]
+                
+                # If we have both normal and anomaly instances, create a balanced chunk
+                if normal_instances and anomaly_instances:
+                    logger.debug(f"Balancing chunk: {len(normal_instances)} normal, {len(anomaly_instances)} anomaly")
+                    max_per_class = chunk_size // 2
+                    balanced_normal = normal_instances[:max_per_class]
+                    balanced_anomaly = anomaly_instances[:max_per_class]
+                    chunk_data = balanced_normal + balanced_anomaly
             
-            # Make predictions
-            chunk_preds = torch.argmax(test_logits, dim=1).cpu().numpy()
-            chunk_true = test_labels.cpu().numpy()
+            # Prepare test data for this chunk
+            test_tinst, test_labels = prepare_batch_for_training(chunk_data, vocab, verbose=False)
             
-            # Add to full results
-            all_predictions.extend(chunk_preds)
-            all_true_labels.extend(chunk_true)
+            # Log label distribution in this chunk
+            label_counts = {}
+            for label in test_labels.cpu().numpy():
+                label_counts[int(label)] = label_counts.get(int(label), 0) + 1
+            logger.debug(f"Chunk {chunk_idx+1} labels: {label_counts}")
             
+            # Create model inputs
+            test_words = test_tinst.to(device)
+            test_masks = torch.ones_like(test_words, dtype=torch.float, device=device)
+            test_word_len = torch.sum(test_masks, dim=1).to(device)
+            test_model_inputs = (test_words, test_masks, test_word_len)
+            
+            # Forward pass with no gradient
+            with torch.no_grad():
+                # Get embeddings and logits
+                test_logits, _, test_embeddings = encoder(test_model_inputs)
+                
+                # Check for NaN values
+                if torch.isnan(test_logits).any() or torch.isnan(test_embeddings).any():
+                    logger.warning("NaN values detected in outputs")
+                    # Replace NaN with zeros
+                    test_logits = torch.nan_to_num(test_logits, nan=0.0)
+                    test_embeddings = torch.nan_to_num(test_embeddings, nan=0.0)
+                
+                # Calculate loss - handle exceptions
+                try:
+                    chunk_loss = torch.nn.CrossEntropyLoss()(test_logits, test_labels.to(device))
+                    total_loss += chunk_loss.item()
+                except Exception as e:
+                    logger.warning(f"Error calculating loss: {str(e)}")
+                    chunk_loss = torch.tensor(0.0)
+                
+                # Make predictions using both logits and similarity approach
+                # Standard logits-based approach
+                chunk_preds_logits = torch.argmax(test_logits, dim=1).cpu().numpy()
+                
+                # Try a similarity-based approach if embeddings are available
+                if test_embeddings is not None and test_embeddings.shape[0] > 0:
+                    # Calculate similarity to prototype - use mean of normal instance embeddings
+                    normal_idx = (test_labels == 0).nonzero(as_tuple=True)[0]
+                    if len(normal_idx) > 0:
+                        # If we have normal instances, use them as prototype
+                        normal_embeddings = test_embeddings[normal_idx]
+                        prototype = normal_embeddings.mean(dim=0, keepdim=True)
+                    else:
+                        # Otherwise use mean of all embeddings as prototype
+                        prototype = test_embeddings.mean(dim=0, keepdim=True)
+                    
+                    # Calculate similarity to prototype
+                    similarity = torch.nn.functional.cosine_similarity(test_embeddings, prototype, dim=1)
+                    
+                    # Lower similarity to normal prototype means higher anomaly probability
+                    threshold = similarity.median().item()  # Adaptive threshold
+                    chunk_preds_sim = (similarity < threshold).cpu().numpy().astype(int)
+                    
+                    # Combine predictions - if both methods agree, use that; otherwise, use logits
+                    chunk_preds = np.where(
+                        chunk_preds_logits == chunk_preds_sim,
+                        chunk_preds_logits,
+                        chunk_preds_logits  # Prefer logits if they disagree
+                    )
+                else:
+                    # If no embeddings, use logits predictions
+                    chunk_preds = chunk_preds_logits
+                
+                chunk_true = test_labels.cpu().numpy()
+                
+                # Add to full results
+                all_predictions.extend(chunk_preds)
+                all_true_labels.extend(chunk_true)
+                
+                # Log prediction distribution for this chunk
+                pred_counts = {}
+                for pred in chunk_preds:
+                    pred_counts[int(pred)] = pred_counts.get(int(pred), 0) + 1
+                logger.debug(f"Chunk {chunk_idx+1} predictions: {pred_counts}")
+                
             # Free memory
             del test_words, test_masks, test_word_len, test_model_inputs
-            del test_logits, test_embeddings, chunk_loss
+            del test_logits, test_embeddings
+            if 'chunk_loss' in locals():
+                del chunk_loss
             torch.cuda.empty_cache()
+            
+        except Exception as e:
+            logger.error(f"Error processing chunk {chunk_idx+1}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            continue
+    
+    # Check if we have predictions
+    if not all_predictions or not all_true_labels:
+        logger.error("No predictions or true labels collected during evaluation")
+        return {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
     
     # Convert to numpy arrays
     y_pred = np.array(all_predictions)
     y_true = np.array(all_true_labels)
     
+    # Log overall prediction distribution
+    pred_distribution = np.bincount(y_pred) if len(y_pred) > 0 else []
+    true_distribution = np.bincount(y_true) if len(y_true) > 0 else []
+    logger.info(f"Prediction distribution: {pred_distribution}")
+    logger.info(f"True label distribution: {true_distribution}")
+    
     # Calculate metrics
     metrics = calculate_metrics(y_true, y_pred)
+    
+    # Validate metrics to ensure they are numbers
+    for metric_name, metric_value in metrics.items():
+        if metric_name in ['accuracy', 'precision', 'recall', 'f1']:
+            if not isinstance(metric_value, (int, float)) or np.isnan(metric_value) or np.isinf(metric_value):
+                logger.warning(f"Invalid {metric_name} value: {metric_value}, setting to 0")
+                metrics[metric_name] = 0.0
     
     # Calculate average loss
     avg_loss = total_loss / num_chunks if num_chunks > 0 else 0

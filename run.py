@@ -137,6 +137,17 @@ def train_mode(args):
     # Process target system
     target_data = process_target_system(params, logger, template_encoder, source_data)
     
+    # Make sure we have the vocab attribute set on all encoders
+    if not hasattr(target_data["target_encoder"], "vocab"):
+        logger.warning("Setting vocab attribute on target encoder")
+        target_data["target_encoder"].vocab = target_data["target_vocab"]
+        
+    # Also set vocab on source encoders if needed
+    for source_system in params['source_systems']:
+        if not hasattr(source_data["source_encoders"][source_system], "vocab"):
+            logger.warning(f"Setting vocab attribute on {source_system} encoder")
+            source_data["source_encoders"][source_system].vocab = source_data["source_vocabularies"][source_system]
+    
     # Create optimizer with correct parameters
     if hasattr(target_data["target_encoder"], "parameters"):
         optimizer = Optimizer(
@@ -227,6 +238,11 @@ def eval_mode(args):
         logger.error(f"Model file {args.model_path} not found")
         sys.exit(1)
     
+    # Make sure vocab attribute is set
+    if not hasattr(target_encoder, "vocab"):
+        logger.warning("Setting vocab attribute on target encoder")
+        target_encoder.vocab = target_vocab
+    
     # Create optimizer
     optimizer = Optimizer(
         parameter=target_encoder.parameters(),
@@ -298,6 +314,11 @@ def predict_mode(args):
     else:
         logger.error(f"Model file {args.model_path} not found")
         sys.exit(1)
+    
+    # Make sure vocab attribute is set
+    if not hasattr(target_encoder, "vocab"):
+        logger.warning("Setting vocab attribute on target encoder")
+        target_encoder.vocab = target_vocab
     
     logger.info(f"Loaded {len(example_logs)} log sequences for prediction")
     

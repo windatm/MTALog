@@ -37,9 +37,18 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     # Set model to training mode
     encoder.train()
     
+    # Get vocab with fallback
+    if hasattr(encoder, 'vocab'):
+        vocab = encoder.vocab
+    else:
+        # Try to extract vocab from first instance in support set
+        vocab = getattr(source_support_set[0], 'vocab', None)
+        if vocab is None:
+            raise AttributeError("No vocab found in encoder or support set. Cannot proceed with training.")
+    
     # Prepare support and query data
-    support_inputs, support_labels = prepare_batch_for_training(source_support_set, encoder.vocab)
-    query_inputs, query_labels = prepare_batch_for_training(source_query_set, encoder.vocab)
+    support_inputs, support_labels = prepare_batch_for_training(source_support_set, vocab)
+    query_inputs, query_labels = prepare_batch_for_training(source_query_set, vocab)
     
     # Move data to device
     support_inputs = support_inputs.to(device)
@@ -82,9 +91,18 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     # Set model to evaluation mode
     encoder.eval()
     
+    # Get vocab with fallback
+    if hasattr(encoder, 'vocab'):
+        vocab = encoder.vocab
+    else:
+        # Try to extract vocab from first instance in support set
+        vocab = getattr(target_support_set[0], 'vocab', None)
+        if vocab is None:
+            raise AttributeError("No vocab found in encoder or support set. Cannot proceed with testing.")
+    
     # Prepare support and query data
-    support_inputs, support_labels = prepare_batch_for_training(target_support_set, encoder.vocab)
-    query_inputs, query_labels = prepare_batch_for_training(target_query_set, encoder.vocab)
+    support_inputs, support_labels = prepare_batch_for_training(target_support_set, vocab)
+    query_inputs, query_labels = prepare_batch_for_training(target_query_set, vocab)
     
     # Move data to device
     support_inputs = support_inputs.to(device)
@@ -107,7 +125,7 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         # Make predictions
         y_pred = optimizer.predict(query_embeddings, adapted_params)
         y_true = query_labels.cpu().numpy()
-        
+    
     # Calculate metrics
     metrics = calculate_metrics(y_true, y_pred.cpu().numpy())
     
@@ -155,6 +173,22 @@ def train_model(
     start_time = time.time()
     best_f1 = 0
     best_model = None
+    
+    # Defensive check for vocab in encoders
+    # For target encoder
+    if not hasattr(target_encoder, 'vocab') and hasattr(source_encoders[source_systems[0]], 'vocab'):
+        logger.warning("Target encoder missing vocab attribute. Using vocab from first source encoder.")
+        target_encoder.vocab = source_encoders[source_systems[0]].vocab
+    
+    # For source encoders
+    for source_system in source_systems:
+        if not hasattr(source_encoders[source_system], 'vocab'):
+            logger.warning(f"Source encoder for {source_system} missing vocab attribute. Using target encoder's vocab.")
+            # Try to get vocab from target encoder
+            if hasattr(target_encoder, 'vocab'):
+                source_encoders[source_system].vocab = target_encoder.vocab
+            else:
+                logger.error(f"No vocab available for {source_system} encoder. Training may fail.")
     
     # Training loop
     for epoch in range(num_epochs):
@@ -261,8 +295,20 @@ def evaluate_model(
     # Set model to evaluation mode
     encoder.eval()
     
+    # Get vocab with fallback
+    if hasattr(encoder, 'vocab'):
+        vocab = encoder.vocab
+    else:
+        # Try to extract vocab from first instance in test data
+        vocab = getattr(test_data[0], 'vocab', None)
+        if vocab is None:
+            logger.error("No vocab found in encoder or test data. Evaluation may fail.")
+            # Try to create a simple vocab as last resort
+            from utils.vocab import Vocab
+            vocab = Vocab()
+    
     # Prepare test data
-    test_inputs, test_labels = prepare_batch_for_training(test_data, encoder.vocab)
+    test_inputs, test_labels = prepare_batch_for_training(test_data, vocab)
     
     # Move data to device
     test_inputs = test_inputs.to(device)
@@ -318,8 +364,17 @@ def predict(
     # Set model to evaluation mode
     encoder.eval()
     
+    # Get vocab with fallback
+    if hasattr(encoder, 'vocab'):
+        vocab = encoder.vocab
+    else:
+        # Try to extract vocab from first instance in log sequences
+        vocab = getattr(log_sequences[0], 'vocab', None)
+        if vocab is None:
+            raise AttributeError("No vocab found in encoder or log sequences. Cannot make predictions.")
+    
     # Prepare inputs
-    inputs, _ = prepare_batch_for_training(log_sequences, encoder.vocab)
+    inputs, _ = prepare_batch_for_training(log_sequences, vocab)
     inputs = inputs.to(device)
     
     # Get encodings

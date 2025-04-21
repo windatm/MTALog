@@ -58,27 +58,43 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare support and query data
-    support_inputs, support_labels = prepare_batch_for_training(source_support_set, vocab)
-    query_inputs, query_labels = prepare_batch_for_training(source_query_set, vocab)
+    support_tinst, support_labels = prepare_batch_for_training(source_support_set, vocab)
+    query_tinst, query_labels = prepare_batch_for_training(source_query_set, vocab)
     
     # Move data to device
-    support_inputs = support_inputs.to(device)
-    support_labels = support_labels.to(device)
-    query_inputs = query_inputs.to(device)
-    query_labels = query_labels.to(device)
+    support_inputs = (
+        support_tinst.to(device),
+        support_labels.to(device)
+    )
+    query_inputs = (
+        query_tinst.to(device),
+        query_labels.to(device)
+    )
+    
+    # Prepare inputs in the correct format
+    # The model expects a tuple of (words, masks, word_len)
+    support_words = support_tinst.to(device)
+    support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
+    support_word_len = torch.sum(support_masks, dim=1).to(device)
+    
+    query_words = query_tinst.to(device)
+    query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
+    query_word_len = torch.sum(query_masks, dim=1).to(device)
     
     # Forward pass on support set
-    support_embeddings = encoder(support_inputs)
+    support_model_inputs = (support_words, support_masks, support_word_len)
+    support_logits, _, support_embeddings = encoder(support_model_inputs)
     
     # Update model parameters with support set (inner loop update)
     optimizer.zero_grad()
-    support_loss = optimizer.compute_loss(support_embeddings, support_labels)
+    support_loss = optimizer.compute_loss(support_logits, support_labels)
     support_loss.backward()
     optimizer.step()
     
     # Forward pass on query set with updated parameters
-    query_embeddings = encoder(query_inputs)
-    query_loss = optimizer.compute_loss(query_embeddings, query_labels)
+    query_model_inputs = (query_words, query_masks, query_word_len)
+    query_logits, _, query_embeddings = encoder(query_model_inputs)
+    query_loss = optimizer.compute_loss(query_logits, query_labels)
     
     return query_loss.item()
 
@@ -115,29 +131,35 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     vocab = ensure_vocab_has_template_to_idx(vocab)
     
     # Prepare support and query data
-    support_inputs, support_labels = prepare_batch_for_training(target_support_set, vocab)
-    query_inputs, query_labels = prepare_batch_for_training(target_query_set, vocab)
+    support_tinst, support_labels = prepare_batch_for_training(target_support_set, vocab)
+    query_tinst, query_labels = prepare_batch_for_training(target_query_set, vocab)
     
-    # Move data to device
-    support_inputs = support_inputs.to(device)
-    support_labels = support_labels.to(device)
-    query_inputs = query_inputs.to(device)
-    query_labels = query_labels.to(device)
+    # Prepare inputs in the correct format
+    # The model expects a tuple of (words, masks, word_len)
+    support_words = support_tinst.to(device)
+    support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
+    support_word_len = torch.sum(support_masks, dim=1).to(device)
+    
+    query_words = query_tinst.to(device)
+    query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
+    query_word_len = torch.sum(query_masks, dim=1).to(device)
     
     # Forward pass on support set (for adaptation)
     with torch.no_grad():
-        support_embeddings = encoder(support_inputs)
+        support_model_inputs = (support_words, support_masks, support_word_len)
+        support_logits, _, support_embeddings = encoder(support_model_inputs)
     
     # Compute adapted parameters based on support set
-    adapted_params = optimizer.adapt(support_embeddings, support_labels)
+    adapted_params = optimizer.adapt(support_logits, support_labels)
     
     # Forward pass on query set with adapted parameters
     with torch.no_grad():
-        query_embeddings = encoder(query_inputs, params=adapted_params)
-        query_loss = optimizer.compute_loss(query_embeddings, query_labels, params=adapted_params)
+        query_model_inputs = (query_words, query_masks, query_word_len)
+        query_logits, _, query_embeddings = encoder(query_model_inputs, params=adapted_params)
+        query_loss = optimizer.compute_loss(query_logits, query_labels, params=adapted_params)
         
         # Make predictions
-        y_pred = optimizer.predict(query_embeddings, adapted_params)
+        y_pred = optimizer.predict(query_logits, adapted_params)
         y_true = query_labels.cpu().numpy()
     
     # Calculate metrics

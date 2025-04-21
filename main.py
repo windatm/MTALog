@@ -358,6 +358,16 @@ def process_target_system(params, logger, template_encoder, source_data):
     # Get the combined vocabulary from source systems
     combined_vocab = source_data['combined_vocab']
     
+    # Initialize variables with default values to prevent UnboundLocalError
+    target_vocab = combined_vocab
+    processor = None
+    encoder = None
+    support_set = []
+    query_set = []
+    train_data = []
+    test_data = []
+    support_templates = set()
+    
     # Try to load from cache first
     data_loaded = False
     if os.path.exists(data_cache_file) and os.path.exists(encoder_cache_file):
@@ -390,6 +400,9 @@ def process_target_system(params, logger, template_encoder, source_data):
                             encoder.repr_lookup[tuple(inst.sequence)] = inst.repr
                 
                 data_loaded = True
+                
+                # Make sure target_vocab is set here too
+                target_vocab = combined_vocab
             else:
                 logger.warning(f"[{target_system}] Cache data validation failed. Reprocessing...")
                 os.remove(data_cache_file)
@@ -513,7 +526,7 @@ def process_target_system(params, logger, template_encoder, source_data):
     
     # Return the processed data
     return {
-        "target_preprocessor": processor,
+        "target_preprocessor": processor if processor is not None else Preprocessor(),
         "target_vocab": target_vocab,
         "target_encoder": encoder,
         "target_support_set": support_set,

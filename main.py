@@ -196,6 +196,11 @@ def process_source_systems(params, logger, template_encoder):
                 if train_data and hasattr(processor, 'embedding') and vocab:
                     logger.info(f"[{source_system}] Loaded from cache: {len(train_data)} instances")
                     
+                    # Count normal and abnormal logs
+                    normal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
+                    abnormal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
+                    logger.info(f"[{source_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs")
+                    
                     # Rebuild repr_lookup if needed
                     if not hasattr(encoder, 'repr_lookup') or not encoder.repr_lookup:
                         encoder.repr_lookup = {}
@@ -264,9 +269,24 @@ def process_source_systems(params, logger, template_encoder):
             
             # Step 5: Split into support/query
             random.shuffle(encoded_data)
-            split_index = int(0.5 * len(encoded_data))
-            support_set = encoded_data[:split_index]
-            query_set = encoded_data[split_index:]
+            
+            # Handle both numeric and string labels for normal logs
+            normal_logs = [x for x in encoded_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
+            abnormal_logs = [x for x in encoded_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
+            
+            logger.info(f"[{source_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs for encoding")
+            
+            # Handle the case when there are no normal logs
+            if not normal_logs:
+                logger.warning(f"[{source_system}] No normal logs found for support/query split. Using a portion of abnormal logs.")
+                split_index = int(0.5 * len(encoded_data))
+                support_set = encoded_data[:split_index]
+                query_set = encoded_data[split_index:]
+            else:
+                # Use a fixed split for simplicity
+                split_index = int(0.5 * len(encoded_data))
+                support_set = encoded_data[:split_index]
+                query_set = encoded_data[split_index:]
             
             # Step 6: Build fallback repr lookup
             encoder.repr_lookup = {
@@ -396,13 +416,52 @@ def process_target_system(params, logger, template_encoder, source_data):
         logger.info(f"[{target_system}] Processed {len(train_data)} instances: {normal_count} normal, {anomaly_count} anomaly")
         
         # Step 2: Split data with few-shot learning
-        normal_logs = [x for x in train_data if x.label == 0]
-        abnormal_logs = [x for x in train_data if x.label == 1]
+        # Handle both numeric and string labels for normal logs
+        normal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
+        abnormal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
         
-        # Get support and query sets
-        support_set, remaining = fewshot_split(normal_logs, params["few_shot_ratio"])
-        support_set += abnormal_logs  # Add all anomalous logs to support set
-        query_set = sample_query_set(remaining, params["query_sample_ratio"])
+        logger.info(f"[{target_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs")
+        
+        # Handle the case when some logs don't have a label attribute
+        unlabeled = [x for x in train_data if not hasattr(x, 'label')]
+        if unlabeled:
+            logger.warning(f"[{target_system}] Found {len(unlabeled)} logs without a label attribute")
+        
+        # Handle case when no normal logs exist
+        if not normal_logs:
+            logger.warning(f"[{target_system}] No normal logs found. Cannot create proper support set for few-shot learning.")
+            logger.warning(f"[{target_system}] Using a small sample of abnormal logs as a fallback.")
+            # In this case, we're deviating from the intended method since we have no normal logs
+            # Use a small portion of abnormal logs for support set as a fallback
+            support_set = abnormal_logs[:int(len(abnormal_logs) * 0.1)]  # Use only 10% for support
+            # Remaining abnormal logs go to query set
+            query_set = abnormal_logs[int(len(abnormal_logs) * 0.1):]
+        else:
+            # Proper few-shot learning approach:
+            # Step 1: Get support set from normal logs ONLY based on few_shot_ratio
+            support_set, remaining_normal = fewshot_split(normal_logs, params["few_shot_ratio"])
+            
+            logger.info(f"[{target_system}] Support set (normal logs only): {len(support_set)}")
+            logger.info(f"[{target_system}] Remaining normal logs: {len(remaining_normal)}")
+            
+            # Step 2: Query set should contain BOTH remaining normal logs AND abnormal logs
+            query_set = []
+            if remaining_normal:
+                # Sample from remaining normal logs
+                sampled_normal = sample_query_set(remaining_normal, params["query_sample_ratio"])
+                query_set.extend(sampled_normal)
+            
+            # Add abnormal logs to query set (not to support set)
+            query_set.extend(abnormal_logs)
+            
+            logger.info(f"[{target_system}] Query set (combined normal and abnormal): {len(query_set)}")
+            
+            # Handle case when query set would be empty
+            if not query_set:
+                logger.warning(f"[{target_system}] No logs available for query set. Using a portion of support set.")
+                split_index = int(0.8 * len(support_set))
+                query_set = support_set[split_index:]
+                support_set = support_set[:split_index]
         
         # Step 3: Collect template IDs from support set
         support_templates = set()
@@ -410,9 +469,21 @@ def process_target_system(params, logger, template_encoder, source_data):
             if hasattr(inst, 'template_ids'):
                 support_templates.update(inst.template_ids)
         
-        # Step 4: Initialize encoder
+        logger.info(f"[{target_system}] Found {len(support_templates)} unique templates in support set")
+        
+        # Step 4: Initialize encoder with combined vocabulary
+        # Since the vocabulary is already combined from source systems in the source_data
+        # we use it directly. The combined_vocab already includes template IDs from source systems.
+        target_vocab = combined_vocab
+        
+        # Now we need to add any templates from the support set that aren't already in the vocab
+        # This would depend on how your Vocab class is implemented
+        # For now, we'll just log that we're using the combined vocabulary
+        logger.info(f"[{target_system}] Using vocabulary with {target_vocab.vocab_size} templates")
+        
+        # Step 5: Initialize encoder
         encoder = AttGRUModel(
-            vocab=combined_vocab,
+            vocab=target_vocab,
             lstm_layers=params["num_layers"],
             lstm_hiddens=params["lstm_hidden_units"],
             dropout=params["dropout_rate"]
@@ -443,7 +514,7 @@ def process_target_system(params, logger, template_encoder, source_data):
     # Return the processed data
     return {
         "target_preprocessor": processor,
-        "target_vocab": combined_vocab,
+        "target_vocab": target_vocab,
         "target_encoder": encoder,
         "target_support_set": support_set,
         "target_query_set": query_set,

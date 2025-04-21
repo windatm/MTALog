@@ -97,15 +97,21 @@ def fewshot_split(instances, normal_ratio):
     Returns:
         tuple: (support_set, query_set)
     """
-    normal_blocks = [ins for ins in instances if ins.label == "Normal"]
-    k = int(normal_ratio * len(normal_blocks))
+    # Handle both string and numeric labels
+    normal_blocks = [ins for ins in instances if getattr(ins, 'label', None) == "Normal" or getattr(ins, 'label', None) == 0]
+    k = max(1, int(normal_ratio * len(normal_blocks)))
 
     np.random.shuffle(normal_blocks)
     support_set = normal_blocks[:k]
-    support_ids = {ins.id for ins in support_set}
-    query_set = [ins for ins in instances if ins.id not in support_ids]
-
-    return support_set, query_set
+    
+    # Create a set of IDs from the support set for fast lookup
+    support_ids = {getattr(ins, 'id', id(ins)) for ins in support_set}
+    
+    # Return all normal instances that are not in the support set
+    # We only return normal instances because the function is splitting normal logs
+    remaining_normal = [ins for ins in normal_blocks if getattr(ins, 'id', id(ins)) not in support_ids]
+    
+    return support_set, remaining_normal
 
 
 def sample_query_set(query_set, sample_ratio=0.1, random_seed=None):
@@ -124,12 +130,14 @@ def sample_query_set(query_set, sample_ratio=0.1, random_seed=None):
         np.random.seed(random_seed)
     
     if not query_set:
-        raise ValueError("Empty query set provided")
+        logger.warning("Empty query set provided to sample_query_set. Returning empty list.")
+        return []
         
     if sample_ratio <= 0 or sample_ratio > 1:
         raise ValueError("Sample ratio must be between 0 and 1")
         
-    sample_size = int(len(query_set) * sample_ratio)
+    sample_size = max(1, int(len(query_set) * sample_ratio))
+    sample_size = min(sample_size, len(query_set))
     indices = np.random.choice(len(query_set), size=sample_size, replace=False)
     
     sampled_query = [query_set[i] for i in indices]

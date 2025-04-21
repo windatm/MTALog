@@ -57,23 +57,30 @@ class CPUEmbedding(nn.Module):
         print('Always in cpu')
         return self.cpu()
 
+    # def forward(self, input):
+    #     if input.is_cuda:
+    #         device = input.get_device()
+    #         input = input.to(device)  # cpu()
+    #         output = F.embedding(input, self.weight, self.padding_idx)
+    #         return output.cuda(device)
+    #     elif input.is_cpu:
+    #         device = input.get_device()
+    #         input = input.to(device)
+    #         output = F.embedding(input, self.weight, self.padding_idx)
+    #         return output.to(device)
+    #     else:
+    #         try:
+    #             output = F.embedding(input, self.weight, self.padding_idx)
+    #         except IndexError:
+    #             print(input)
+    #         return output
+
     def forward(self, input):
-        if input.is_cuda:
-            device = input.get_device()
-            input = input.to(device)  # cpu()
-            output = F.embedding(input, self.weight, self.padding_idx)
-            return output.cuda(device)
-        elif input.is_cpu:
-            device = input.get_device()
-            input = input.to(device)
-            output = F.embedding(input, self.weight, self.padding_idx)
-            return output.to(device)
-        else:
-            try:
-                output = F.embedding(input, self.weight, self.padding_idx)
-            except IndexError:
-                print(input)
-            return output
+        device = input.device                     # giữ nguyên device gốc
+        weight = self.weight.to(device)           # chuyển weight sang cùng device
+        return F.embedding(input, weight, self.padding_idx)
+
+
 
     def extra_repr(self):
         s = '{num_embeddings}, {embedding_dim}'

@@ -1,6 +1,6 @@
 from preprocessing.Preprocess import Preprocessor
 from representations.sequences.statistics import Sequential_TF
-
+import torch.nn.functional as F 
 import torch
 from CONSTANTS import DEVICE, PROJECT_ROOT
 
@@ -90,44 +90,36 @@ def encode_log_sequences(processor, train_data, test_data=None):
 
 
 def encode_log_sequences_with_gru(model, vocab, instances, batch_size=128, show_progress=True):
-    """
-    Encode log sequences into latent vectors using AttGRUModel.
-
-    Args:
-        model (AttGRUModel): Encoder with attention GRU.
-        vocab (Vocab): Vocabulary used for token indexing.
-        instances (list[Instance]): List of log instances.
-        batch_size (int): Batch size for processing.
-        show_progress (bool): Whether to show progress bar.
-
-    Returns:
-        list[Instance]: Same list with `.repr` updated from latent space.
-    """
     if not instances:
         raise ValueError("Empty instance list provided")
 
     model.eval()
     encoded_instances = []
-    
+
     with torch.no_grad():
         iterator = data_iter(instances, batch_size=batch_size, shuffle=False)
         if show_progress:
             iterator = tqdm(iterator, desc="Encoding sequences", total=len(instances)//batch_size + 1)
-            
+
         for batch in iterator:
             try:
-                tinst = generate_tinsts_binary_label(batch, vocab)
+                tinst, _ = generate_tinsts_binary_label(batch, vocab)
                 tinst.to(DEVICE)
 
                 _, _, latent = model(tinst.inputs)
+
+                latent = F.normalize(latent, p=2, dim=1)
+
                 for i, inst in enumerate(batch):
                     inst.repr = latent[i].detach().cpu().numpy()
                     encoded_instances.append(inst)
+
             except Exception as e:
                 logger.error(f"Error encoding batch: {str(e)}")
                 raise
 
     return encoded_instances
+
 
 
 def find_most_similar_template(instance, source_encoders, similarity_threshold=0.8):
@@ -185,7 +177,7 @@ def fallback_encode_instance(instance, encoder_target, vocab_target, source_enco
 
         # Encode using target encoder
         encoder_target.eval()
-        tinst = generate_tinsts_binary_label([instance], vocab_target)
+        tinst, _ = generate_tinsts_binary_label([instance], vocab_target)
         tinst.to(DEVICE)
         _, _, latent = encoder_target(tinst.inputs)
         return latent[0].detach().cpu().numpy()

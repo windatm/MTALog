@@ -276,7 +276,7 @@ class LinearAttention(torch.nn.Module):
     ) -> torch.Tensor:
         similarities = self._forward_internal(vector, matrix)
         if self._normalize:
-            return masked_softmax(similarities, matrix_mask)
+            return masked_softmax(similarities, matrix_mask.to(similarities.device))
         else:
             return similarities
 

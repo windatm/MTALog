@@ -80,43 +80,41 @@ def data_iter(data, batch_size, shuffle=True):
 
 
 def generate_tinsts_binary_label(batch_insts, vocab):
-    """
-    Generate tensor-based batch data for binary classification tasks.
-
-    Args:
-        batch_insts (list): List of input instances.
-        vocab (Vocabulary): Vocabulary object with word2id and tag2id mappings.
-        if_evaluate (bool): Flag for evaluation mode (not used internally).
-
-    Returns:
-        TInstWithLogits: A structured tensor containing inputs, masks, lengths, and label targets.
-    """
-
-    slen = len(batch_insts[0].sequence)
+    slen = max(len(inst.sequence) for inst in batch_insts)
     batch_size = len(batch_insts)
-    for b in range(1, batch_size):
-        cur_slen = len(batch_insts[b].sequence)
-        if cur_slen > slen:
-            slen = cur_slen
+
     tinst = TInstWithLogits(batch_size, slen, 2)
-    b = 0
-    for inst in batch_insts:
+
+    for b, inst in enumerate(batch_insts):
         tinst.src_ids.append(str(inst.id))
-        confidence = 0.5 * inst.confidence
+
         if inst.predicted == "":
             inst.predicted = inst.label
-        tinst.tags[b, vocab.tag2id(inst.predicted)] = 1 - confidence
-        tinst.tags[b, 1 - vocab.tag2id(inst.predicted)] = confidence
-        tinst.g_truth[b] = vocab.tag2id(inst.predicted)
+
+        confidence = 0.5 * inst.confidence
+        tag_id = vocab.tag2id(inst.predicted)
+        tinst.tags[b, tag_id] = 1 - confidence
+        tinst.tags[b, 1 - tag_id] = confidence
+        tinst.g_truth[b] = tag_id
+
         cur_slen = len(inst.sequence)
         tinst.word_len[b] = cur_slen
-        for index in range(cur_slen):
-            if index >= 500:
-                break
+
+        for index in range(min(cur_slen, 500)):
             tinst.src_words[b, index] = vocab.word2id(inst.sequence[index])
             tinst.src_masks[b, index] = 1
-        b += 1
-    return tinst
+
+    # Trả về cả inputs tuple
+    inputs = (
+        tinst.src_words,
+        tinst.src_masks,
+        tinst.word_len,
+        tinst.g_truth  # <- cần dùng cho loss
+    )
+
+    return tinst, inputs
+
+
 
 
 def batch_variable_inst(insts, tagids, tag_logits, id2tag):

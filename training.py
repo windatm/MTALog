@@ -403,8 +403,26 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
         threshold = torch.mean(distances) + margin * torch.std(distances)
         predicted_labels = (distances > threshold).long()
         
-        # Get true labels from query batch
-        true_labels = torch.tensor([inst.label for inst in query_batch], device=device)
+        # Get true labels from query batch - handle string labels
+        numeric_labels = []
+        for inst in query_batch:
+            if isinstance(inst.label, str):
+                if inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg']:
+                    numeric_labels.append(0)
+                elif inst.label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']:
+                    numeric_labels.append(1)
+                else:
+                    # Try to convert to integer if possible
+                    try:
+                        numeric_labels.append(int(inst.label))
+                    except ValueError:
+                        # Default to 0 for unknown strings
+                        numeric_labels.append(0)
+            else:
+                # Use the label directly if it's not a string
+                numeric_labels.append(int(inst.label))
+        
+        true_labels = torch.tensor(numeric_labels, device=device)
         
         # Calculate metrics
         tp = torch.sum((predicted_labels == 1) & (true_labels == 1)).item()
@@ -738,25 +756,58 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
         return {"accuracy": 0, "precision": 0, "recall": 0, "f1": 0, 
                 "tp": 0, "fp": 0, "fn": 0, "tn": 0}
     
+    # Validate labels in the query set
+    if logger:
+        normal_count = sum(1 for inst in target_query_set if getattr(inst, 'label', None) == 0 or 
+                           (isinstance(getattr(inst, 'label', None), str) and 
+                            getattr(inst, 'label', '').lower() in ['normal', 'negative', '0', 'norm', 'neg']))
+        
+        anomaly_count = sum(1 for inst in target_query_set if getattr(inst, 'label', None) == 1 or 
+                            (isinstance(getattr(inst, 'label', None), str) and 
+                             getattr(inst, 'label', '').lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']))
+        
+        logger.info(f"Query set label distribution: {normal_count} normal, {anomaly_count} anomalous")
+        
+        if normal_count == 0 and anomaly_count == 0:
+            logger.warning("Query set has no valid labels. Check data preprocessing.")
+    
     # Set model to evaluation mode
     encoder.eval()
     
     # Process in batches to handle large datasets
     num_batches = max(1, len(target_query_set) // batch_size)
     metrics_sum = defaultdict(float)
+    valid_batches = 0
     
     for i in range(num_batches):
         start_idx = i * batch_size
         end_idx = min((i + 1) * batch_size, len(target_query_set))
         query_batch = target_query_set[start_idx:end_idx]
         
+        # Skip empty batches
+        if not query_batch:
+            if logger:
+                logger.warning(f"Skipping empty batch {i+1}/{num_batches}")
+            continue
+        
         # Use a subset of support set for efficiency if it's large
         support_batch = target_support_set[:min(len(target_support_set), batch_size * 2)]
         
         if logger:
-            normal_count = sum(1 for inst in query_batch if inst.label == 0)
-            anomaly_count = sum(1 for inst in query_batch if inst.label == 1)
+            normal_count = sum(1 for inst in query_batch if getattr(inst, 'label', None) == 0 or 
+                           (isinstance(getattr(inst, 'label', None), str) and 
+                            getattr(inst, 'label', '').lower() in ['normal', 'negative', '0', 'norm', 'neg']))
+            
+            anomaly_count = sum(1 for inst in query_batch if getattr(inst, 'label', None) == 1 or 
+                            (isinstance(getattr(inst, 'label', None), str) and 
+                             getattr(inst, 'label', '').lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']))
+            
             logger.debug(f"Batch {i+1}/{num_batches}: Query batch has {normal_count} normal, {anomaly_count} anomalous")
+            
+            # Skip batches with no valid labels
+            if normal_count == 0 and anomaly_count == 0:
+                logger.warning(f"Skipping batch {i+1}/{num_batches} with no valid labels")
+                continue
         
         try:
             # Run evaluation step
@@ -773,13 +824,21 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
             for k, v in batch_metrics.items():
                 metrics_sum[k] += v
                 
+            valid_batches += 1
+                
         except Exception as e:
             if logger:
                 logger.error(f"Error in evaluation batch {i+1}/{num_batches}: {str(e)}")
                 logger.error(traceback.format_exc())
     
-    # Calculate average metrics
-    metrics_avg = {k: v / num_batches for k, v in metrics_sum.items()}
+    # Calculate average metrics (avoid division by zero)
+    if valid_batches > 0:
+        metrics_avg = {k: v / valid_batches for k, v in metrics_sum.items()}
+    else:
+        if logger:
+            logger.warning("No valid batches were processed during evaluation")
+        metrics_avg = {"accuracy": 0, "precision": 0, "recall": 0, "f1": 0, 
+                      "tp": 0, "fp": 0, "fn": 0, "tn": 0}
     
     if logger:
         logger.info(f"Evaluation metrics: "

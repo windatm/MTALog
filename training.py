@@ -72,7 +72,7 @@ def cluster_loss(embeddings, centroid=None):
     return loss, centroid
 
 
-def contrastive_loss(embeddings, labels, centroid, margin=1.0):
+def contrastive_loss(embeddings, labels, centroid, margin=0.5, reg_lambda=0.01):
     """
     Contrastive loss để kéo normal về gần cluster và đẩy anomaly ra xa
     
@@ -80,7 +80,8 @@ def contrastive_loss(embeddings, labels, centroid, margin=1.0):
         embeddings: Tensor embeddings từ logs
         labels: Nhãn của logs (0: normal, 1: anomaly)
         centroid: Tâm điểm của normal cluster
-        margin: Khoảng cách tối thiểu để đẩy anomaly ra
+        margin: Khoảng cách tối thiểu để đẩy anomaly ra (đã giảm từ 1.0 xuống 0.5)
+        reg_lambda: Hệ số regularization để tránh overfitting
         
     Returns:
         loss: Tổng hợp loss
@@ -99,8 +100,14 @@ def contrastive_loss(embeddings, labels, centroid, margin=1.0):
     anomaly_distances = distances[anomaly_mask]
     anomaly_loss = torch.mean(torch.clamp(margin - anomaly_distances, min=0)) if torch.any(anomaly_mask) else torch.tensor(0.0, device=embeddings.device)
     
+    # Thêm L2 regularization trên embeddings để tránh overfitting
+    l2_reg = reg_lambda * torch.mean(torch.norm(embeddings, dim=1))
+    
     # Tổng hợp loss
-    total_loss = normal_loss + anomaly_loss
+    total_loss = normal_loss + anomaly_loss + l2_reg
+    
+    # In thêm thông tin về từng thành phần loss để debug
+    print(f"  Normal Loss: {normal_loss.item():.4f}, Anomaly Loss: {anomaly_loss.item():.4f}, Reg: {l2_reg.item():.4f}")
     
     return total_loss
 
@@ -170,7 +177,7 @@ def classify_logs(query_embeddings, centroid, support_embeddings, z_score=2.0):
     return predictions, confidence, threshold
 
 
-def meta_train_step(source_support_set, source_query_set, encoder, optimizer, device, batch_size=32, margin=1.0, logger=None):
+def meta_train_step(source_support_set, source_query_set, encoder, optimizer, device, batch_size=32, margin=0.5, reg_lambda=0.01, logger=None):
     """
     Perform one meta-training step on source data using the two-stage approach:
     1. Build a normal cluster using support set
@@ -183,7 +190,8 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         optimizer: Optimizer for parameter updates
         device: Device to run computations on
         batch_size: Batch size for training
-        margin: Margin for contrastive loss
+        margin: Margin for contrastive loss (giảm từ 1.0 xuống 0.5)
+        reg_lambda: Hệ số regularization để tránh overfitting
         logger: Optional logger for debug information
         
     Returns:
@@ -289,9 +297,9 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         # Get embeddings
         query_logits, _, query_embeddings = encoder(query_model_inputs)
         
-        # Apply contrastive loss to refine boundaries
+        # Apply contrastive loss to refine boundaries với margin nhỏ hơn và regularization
         stage2_loss = contrastive_loss(query_embeddings, query_labels.to(device), 
-                                      normal_centroid, margin=margin)
+                                      normal_centroid, margin=margin, reg_lambda=reg_lambda)
         
         # In thông tin về stage2_loss
         print(f"Stage 2 - Contrastive Loss: {stage2_loss.item():.4f}")
@@ -617,7 +625,9 @@ def train_model(
     num_epochs=10,
     batch_size=32,
     output_model_dir=None,
-    logger=None
+    logger=None,
+    margin=0.5,
+    reg_lambda=0.01
 ):
     """
     Train a model using meta-learning approach with multiple source systems
@@ -631,11 +641,15 @@ def train_model(
         source_encoders: Dictionary mapping system names to encoders
         target_encoder: Target neural network encoder model
         optimizer: Optimizer for parameter updates
+            Gợi ý: Nên dùng optimizer với learning rate thấp và weight decay
+            VD: optimizer = torch.optim.AdamW(target_encoder.parameters(), lr=1e-4, weight_decay=0.01)
         device: Device to run computations on
         num_epochs: Number of epochs to train
         batch_size: Batch size for training
         output_model_dir: Directory to save the model
         logger: Logger for tracking training process
+        margin: Margin cho contrastive loss (mặc định là 0.5 thay vì 1.0 như trước đây)
+        reg_lambda: Hệ số regularization để tránh overfitting (mặc định là 0.01)
     
     Returns:
         trained_encoder: Trained encoder model
@@ -643,6 +657,14 @@ def train_model(
     """
     if logger:
         logger.info(f"Training model with {len(source_systems)} source systems for {num_epochs} epochs")
+    
+    print(f"Training with margin={margin}, reg_lambda={reg_lambda}")
+    
+    # Kiểm tra và in thông tin về optimizer
+    if hasattr(optimizer, 'param_groups'):
+        lr = optimizer.param_groups[0]['lr']
+        weight_decay = optimizer.param_groups[0].get('weight_decay', 0)
+        print(f"Optimizer: {optimizer.__class__.__name__}, LR: {lr}, Weight decay: {weight_decay}")
         
     # Ensure model is on the correct device
     target_encoder = target_encoder.to(device)
@@ -698,7 +720,9 @@ def train_model(
                     target_encoder, 
                     optimizer, 
                     device, 
-                    batch_size
+                    batch_size,
+                    margin=margin,
+                    reg_lambda=reg_lambda
                 )
                 
                 epoch_loss += loss
@@ -748,6 +772,7 @@ def train_model(
                     torch.save(target_encoder.state_dict(), save_path)
                     if logger:
                         logger.info(f"Saved best model with F1 {current_f1:.4f} to {save_path}")
+                    print(f"Saved best model with F1 {current_f1:.4f} to {save_path}")
         else:
             # If no target data available, save based on loss
             if avg_loss < best_loss:
@@ -756,6 +781,7 @@ def train_model(
                     torch.save(target_encoder.state_dict(), save_path)
                     if logger:
                         logger.info(f"Saved best model with loss {avg_loss:.4f} to {save_path}")
+                    print(f"Saved best model with loss {avg_loss:.4f} to {save_path}")
     
     # Load best model if path specified
     if save_path and os.path.exists(save_path):
@@ -768,10 +794,12 @@ def train_model(
     if logger:
         logger.info(f"Training completed. Best F1: {best_f1:.4f}")
     
+    print(f"Training completed. Best F1: {best_f1:.4f}")
+    
     return target_encoder, best_f1
 
 
-def train_model_single(source_support_set, source_query_set, encoder, optimizer, device, epochs=10, batch_size=32, logger=None, save_path=None):
+def train_model_single(source_support_set, source_query_set, encoder, optimizer, device, epochs=10, batch_size=32, logger=None, save_path=None, margin=0.5, reg_lambda=0.01):
     """
     Train a model using meta-learning approach with a single source system
     
@@ -780,11 +808,15 @@ def train_model_single(source_support_set, source_query_set, encoder, optimizer,
         source_query_set: Query set from source domain
         encoder: Neural network encoder model
         optimizer: Optimizer for parameter updates
+            Gợi ý: Nên dùng optimizer với learning rate thấp và weight decay
+            VD: optimizer = torch.optim.AdamW(encoder.parameters(), lr=1e-4, weight_decay=0.01)
         device: Device to run computations on
         epochs: Number of epochs to train
         batch_size: Batch size for training
         logger: Logger for tracking training process
         save_path: Path to save the model
+        margin: Margin cho contrastive loss (mặc định là 0.5 thay vì 1.0 như trước đây)
+        reg_lambda: Hệ số regularization để tránh overfitting (mặc định là 0.01)
     
     Returns:
         trained_encoder: Trained encoder model
@@ -792,8 +824,17 @@ def train_model_single(source_support_set, source_query_set, encoder, optimizer,
     # Ensure model is on the correct device
     encoder = encoder.to(device)
     
+    print(f"Training with margin={margin}, reg_lambda={reg_lambda}")
+    
+    # Kiểm tra và in thông tin về optimizer
+    if hasattr(optimizer, 'param_groups'):
+        lr = optimizer.param_groups[0]['lr']
+        weight_decay = optimizer.param_groups[0].get('weight_decay', 0)
+        print(f"Optimizer: {optimizer.__class__.__name__}, LR: {lr}, Weight decay: {weight_decay}")
+    
     best_loss = float('inf')
     final_centroid = None
+    previous_centroid = None
     
     for epoch in range(epochs):
         # Shuffle data for this epoch
@@ -822,7 +863,9 @@ def train_model_single(source_support_set, source_query_set, encoder, optimizer,
                 encoder, 
                 optimizer, 
                 device, 
-                batch_size
+                batch_size,
+                margin=margin,
+                reg_lambda=reg_lambda
             )
             
             epoch_loss += loss
@@ -837,9 +880,20 @@ def train_model_single(source_support_set, source_query_set, encoder, optimizer,
         # Calculate average loss for the epoch
         avg_loss = epoch_loss / max(batch_count, 1)
         
+        # In thông tin loss trung bình
+        print(f"Epoch {epoch+1}/{epochs} - Average Loss: {avg_loss:.4f}")
+        
         if logger:
             logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
         
+        # Log centroid information and changes since last epoch
+        if final_centroid is not None and previous_centroid is not None:
+            log_centroid_changes(final_centroid, previous_centroid, logger, epoch+1)
+            
+        # Store current centroid for next epoch comparison
+        if final_centroid is not None:
+            previous_centroid = final_centroid.clone()
+            
         # Save the best model
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -847,13 +901,16 @@ def train_model_single(source_support_set, source_query_set, encoder, optimizer,
                 torch.save(encoder.state_dict(), save_path)
                 if logger:
                     logger.info(f"Saved best model with loss {avg_loss:.4f} to {save_path}")
+                print(f"Saved best model with loss {avg_loss:.4f} to {save_path}")
     
     # Load best model if path specified
-    if save_path:
+    if save_path and os.path.exists(save_path):
         encoder.load_state_dict(torch.load(save_path))
     
     if logger:
         logger.info(f"Training completed. Best loss: {best_loss:.4f}")
+    
+    print(f"Training completed. Best loss: {best_loss:.4f}")
     
     # Attach the normal centroid to the encoder for later use
     if final_centroid is not None:

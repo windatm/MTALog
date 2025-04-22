@@ -333,14 +333,69 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
     
     # Log label distribution if logger is provided
     if logger:
-        normal_count = sum(1 for inst in query_batch if inst.label == 0)
-        anomaly_count = sum(1 for inst in query_batch if inst.label == 1)
+        # Kiểm tra chi tiết nhãn để debug
+        label_types = {}
+        label_values = {}
+        for inst in query_batch:
+            if hasattr(inst, 'label'):
+                label = inst.label
+                label_type = type(label).__name__
+                
+                # Đếm theo loại
+                if label_type not in label_types:
+                    label_types[label_type] = 0
+                label_types[label_type] += 1
+                
+                # Đếm theo giá trị
+                label_str = str(label)
+                if label_str not in label_values:
+                    label_values[label_str] = 0
+                label_values[label_str] += 1
+        
+        if label_types:
+            logger.debug(f"Query batch label types: {label_types}")
+        if label_values:
+            logger.debug(f"Query batch label values: {label_values}")
+        
+        # Xác định nhãn dạng numeric
+        normal_count = sum(1 for inst in query_batch if hasattr(inst, 'label') and 
+                          (inst.label == 0 or 
+                          (isinstance(inst.label, str) and 
+                           inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))
+        
+        anomaly_count = sum(1 for inst in query_batch if hasattr(inst, 'label') and 
+                           (inst.label == 1 or 
+                           (isinstance(inst.label, str) and 
+                            inst.label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos'])))
+        
         logger.debug(f"Query batch: {normal_count} normal, {anomaly_count} anomalous")
         
+        if normal_count == 0 and anomaly_count == 0 and query_batch:
+            logger.warning(f"No recognized labels found in query batch of size {len(query_batch)}. Check label format.")
+            # Kiểm tra xem có nhãn nào nhưng không được nhận diện không
+            if label_values:
+                logger.warning(f"Found unrecognized label values: {label_values}. Might need to update label normalization.")
+        
         if support_batch:
-            support_normal = sum(1 for inst in support_batch if inst.label == 0)
-            support_anomaly = sum(1 for inst in support_batch if inst.label == 1)
+            # Tương tự cho support batch
+            support_normal = sum(1 for inst in support_batch if hasattr(inst, 'label') and 
+                                (inst.label == 0 or 
+                                (isinstance(inst.label, str) and 
+                                 inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))
+            
+            support_anomaly = sum(1 for inst in support_batch if hasattr(inst, 'label') and 
+                                 (inst.label == 1 or 
+                                 (isinstance(inst.label, str) and 
+                                  inst.label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos'])))
+            
             logger.debug(f"Support batch: {support_normal} normal, {support_anomaly} anomalous")
+            
+            if support_normal == 0 and support_anomaly == 0 and support_batch:
+                # Thử kiểm tra label đầu tiên để debug
+                if hasattr(support_batch[0], 'label'):
+                    logger.warning(f"Support batch has zero recognized labels. First instance label: {support_batch[0].label} (type: {type(support_batch[0].label).__name__})")
+                else:
+                    logger.warning("Support batch instances don't have 'label' attribute")
     
     # Process query batch
     query_tinst, query_labels = prepare_batch_for_training(query_batch, encoder.vocab, verbose=False)
@@ -758,6 +813,39 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
     
     # Validate labels in the query set
     if logger:
+        # Thêm kiểm tra chi tiết về nhãn dữ liệu
+        logger.info(f"Performing detailed label inspection for query set...")
+        label_types = {}
+        label_values = {}
+        
+        for i, inst in enumerate(target_query_set[:min(100, len(target_query_set))]):  # Kiểm tra 100 instance đầu tiên
+            label = getattr(inst, 'label', None)
+            label_type = type(label).__name__
+            
+            # Đếm theo loại
+            if label_type not in label_types:
+                label_types[label_type] = 0
+            label_types[label_type] += 1
+            
+            # Đếm theo giá trị
+            label_str = str(label)
+            if label_str not in label_values:
+                label_values[label_str] = 0
+            label_values[label_str] += 1
+            
+            # In ra chi tiết một số instance mẫu
+            if i < 5:  # In 5 instance đầu tiên
+                logger.info(f"Sample instance {i}: label={label} (type={label_type}), dir(inst)={dir(inst)}")
+        
+        logger.info(f"Label types distribution: {label_types}")
+        logger.info(f"Label values distribution: {label_values}")
+        
+        # Kiểm tra xem có các attribute khác có thể chứa nhãn không
+        potential_label_attrs = ['label', 'anomaly', 'is_anomaly', 'class', 'category', 'tag']
+        for attr in potential_label_attrs:
+            if any(hasattr(inst, attr) for inst in target_query_set[:100]):
+                logger.info(f"Found alternative label attribute: '{attr}'")
+        
         normal_count = sum(1 for inst in target_query_set if getattr(inst, 'label', None) == 0 or 
                            (isinstance(getattr(inst, 'label', None), str) and 
                             getattr(inst, 'label', '').lower() in ['normal', 'negative', '0', 'norm', 'neg']))
@@ -855,7 +943,8 @@ def predict(
     encoder,
     template_lookup,
     device,
-    threshold=0.5
+    threshold=0.5,
+    logger=None
 ):
     """
     Make predictions for new log sequences using a memory-efficient approach
@@ -866,6 +955,7 @@ def predict(
         template_lookup: Lookup table for template embeddings
         device: Device to run computations on
         threshold: Classification threshold
+        logger: Optional logger for debug information
         
     Returns:
         predictions: Binary predictions (0 for normal, 1 for anomaly)
@@ -892,6 +982,26 @@ def predict(
     
     chunk_size = 32  # Smaller batch size to prevent OOM
     num_chunks = (len(log_sequences) + chunk_size - 1) // chunk_size
+    
+    # Thêm kiểm tra và thông báo về dữ liệu
+    if len(log_sequences) > 0 and logger:
+        logger.info(f"Predict: Processing {len(log_sequences)} log sequences in {num_chunks} chunks")
+        # Kiểm tra label distribution
+        if all(hasattr(log, 'label') for log in log_sequences[:min(100, len(log_sequences))]):
+            normal_count = sum(1 for log in log_sequences if 
+                              hasattr(log, 'label') and (log.label == 0 or 
+                                                       (isinstance(log.label, str) and 
+                                                        log.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))
+            anomaly_count = sum(1 for log in log_sequences if 
+                               hasattr(log, 'label') and (log.label == 1 or 
+                                                        (isinstance(log.label, str) and 
+                                                         log.label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos'])))
+            logger.info(f"Predict: Data has {normal_count} normal, {anomaly_count} anomalous instances (based on 'label' attribute)")
+        
+        # Kiểm tra sequence attribute
+        sequence_lens = [len(getattr(log, 'sequence', [])) for log in log_sequences[:min(10, len(log_sequences))]]
+        if sequence_lens:
+            logger.info(f"Predict: First 10 sequence lengths: {sequence_lens}")
     
     for chunk_idx in range(num_chunks):
         # Get chunk of data

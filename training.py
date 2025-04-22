@@ -222,13 +222,18 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     
     # Filter the support set to ensure we're using only normal instances
     normal_support_set = [inst for inst in source_support_set if 
-                         hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
+                         hasattr(inst, 'label') and 
+                         (inst.label == 0 or 
+                         (isinstance(inst.label, str) and 
+                          inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg']))]
     
     # If no normal samples in support, warn and use all samples
     if not normal_support_set:
         if logger:
             logger.warning("No normal samples found in support set. Using all instances.")
         normal_support_set = source_support_set
+    elif logger:
+        logger.debug(f"Filtered {len(normal_support_set)}/{len(source_support_set)} normal instances for training")
     
     # Limit batch size to prevent memory issues
     normal_support_batch = normal_support_set[:batch_size]
@@ -418,8 +423,14 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
         if logger:
             logger.debug("Using pre-computed normal centroid from encoder")
     elif support_batch:
-        # Filter support set to only include normal instances
-        normal_support = [inst for inst in support_batch if inst.label == 0]
+        # Filter support set to only include normal instances - FIX: Handle string labels
+        normal_support = [inst for inst in support_batch if 
+                         inst.label == 0 or 
+                         (isinstance(inst.label, str) and 
+                          inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])]
+        
+        if logger:
+            logger.debug(f"Filtered {len(normal_support)}/{len(support_batch)} normal instances for centroid calculation")
         
         if not normal_support:
             if logger:
@@ -516,7 +527,12 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
         # Expected distances: small for normal, large for anomalies
         expected_distances = torch.zeros_like(distances)
         for i, inst in enumerate(query_batch):
-            if inst.label == 0:  # Normal
+            # Handle normal vs anomaly
+            is_normal = (inst.label == 0 or 
+                        (isinstance(inst.label, str) and 
+                         inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg']))
+            
+            if is_normal:  # Normal
                 expected_distances[i] = 0.0  # Should be close to centroid
             else:  # Anomaly
                 expected_distances[i] = margin  # Should be at least 'margin' away

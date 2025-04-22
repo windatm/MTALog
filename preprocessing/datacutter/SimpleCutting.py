@@ -196,3 +196,46 @@ def sample_query_set(query_set, sample_ratio=0.1, random_seed=None):
     logger.info(f"Sampled {len(sampled_query)} instances from query set of size {len(query_set)}")
     
     return sampled_query
+
+
+def cut_sequential(train, val):
+    """
+    Returns a sequential data-splitting function that partitions a dataset into
+    training, validation, and test sets without shuffling, based on given proportions.
+    
+    Useful for time-ordered log data where preserving sequence is important.
+
+    Args:
+        train (float): Proportion of data to be used for training (0 < train <= 1).
+        val (float): Proportion of data to be used for validation (0 <= val < 1).
+
+    Returns:
+        function: A function `cut(instances)` that applies the sequential split.
+    """
+    def cut(instances):
+        nonlocal train, val
+        if not instances:
+            raise ValueError("Empty instance list provided")
+            
+        # Validate proportions
+        if train <= 0 or train > 1:
+            raise ValueError("Train proportion must be between 0 and 1")
+        if val < 0 or val >= 1:
+            raise ValueError("Validation proportion must be between 0 and 1")
+        if train + val > 1:
+            raise ValueError("Train + validation proportion must be less than or equal to 1")
+
+        # Calculate split points
+        val_split = int(val * len(instances))
+        train_split = int(train * len(instances))
+        
+        # Split data sequentially (without shuffling)
+        train_data = instances[:train_split]
+        val_data = instances[train_split:train_split + val_split]
+        test_data = instances[train_split + val_split:]
+
+        logger.info(f"Sequential split - Train: {len(train_data)}, Val: {len(val_data)}, Test: {len(test_data)}")
+        
+        return train_data, val_data, test_data
+
+    return cut

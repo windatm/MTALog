@@ -185,6 +185,9 @@ def train_mode(args):
         logger=logger
     )
     
+    # Format evaluation metrics in the specific format
+    logger.info(f"Evaluation metrics: Accuracy={final_metrics['accuracy']:.4f}, Precision={final_metrics['precision']:.4f}, Recall={final_metrics['recall']:.4f}, F1={final_metrics['f1']:.4f}")
+    
     logger.info("Training complete!")
     return final_metrics
 

@@ -163,8 +163,8 @@ def train_mode(args):
         source_systems=params['source_systems'],
         source_support_sets=source_data['source_support_sets'],
         source_query_sets=source_data['source_query_sets'],
-        target_support_set=target_data['target_support_set'],
-        target_query_set=target_data['target_query_set'],
+        target_support_set=target_data['support_set'],
+        target_query_set=target_data['query_set'],
         source_encoders=source_data['source_encoders'],
         target_encoder=target_data['target_encoder'],
         optimizer=optimizer,
@@ -177,7 +177,7 @@ def train_mode(args):
     
     # Final evaluation
     final_metrics = evaluate_model(
-        test_data=target_data['target_inst_test'],
+        test_data=target_data['test_data'],
         encoder=target_data['target_encoder'],
         optimizer=optimizer,
         device=DEVICE,
@@ -324,7 +324,7 @@ def predict_mode(args):
     
     # Create template lookup
     template_lookup = create_embedding_lookup(
-        templates=[t for log in example_logs for t in log.template_ids],
+        templates=[t for log in example_logs for t in log.sequence],
         encoder=target_encoder,
         device=DEVICE
     )

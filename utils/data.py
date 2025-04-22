@@ -315,7 +315,17 @@ def fallback_encode_instance(instance, model, source_vocab, target_vocab, simila
     # First try encoding with the target vocabulary
     try:
         result = []
-        for token in instance.template_ids:
+        # Check if instance has template_ids, otherwise use sequence
+        token_sequence = None
+        if hasattr(instance, 'template_ids'):
+            token_sequence = instance.template_ids
+        elif hasattr(instance, 'sequence'):
+            token_sequence = instance.sequence
+        else:
+            logger.error(f"Error in fallback_encode_instance: 'Instance' object has no attribute 'template_ids' or 'sequence'")
+            return []
+            
+        for token in token_sequence:
             if token in target_vocab.w2i:
                 result.append(target_vocab.w2i[token])
             else:

@@ -367,7 +367,6 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
                           (inst.label == 0 or 
                           (isinstance(inst.label, str) and 
                            inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))
-        
         anomaly_count = sum(1 for inst in query_batch if hasattr(inst, 'label') and 
                            (inst.label == 1 or 
                            (isinstance(inst.label, str) and 
@@ -553,6 +552,48 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
     return 0.0, metrics
 
 
+def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None):
+    """
+    Log changes in centroid between epochs
+    
+    Args:
+        current_centroid: Current centroid tensor
+        previous_centroid: Previous centroid tensor from last epoch (can be None for first epoch)
+        logger: Logger instance
+        epoch: Current epoch number (optional)
+    """
+    if logger is None:
+        return
+        
+    # Get basic centroid stats
+    centroid_norm = torch.norm(current_centroid).item()
+    centroid_mean = torch.mean(current_centroid).item()
+    centroid_std = torch.std(current_centroid).item()
+    centroid_min = torch.min(current_centroid).item()
+    centroid_max = torch.max(current_centroid).item()
+    
+    epoch_str = f"Epoch {epoch} - " if epoch is not None else ""
+    logger.info(f"{epoch_str}Centroid stats - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}, "
+               f"Std: {centroid_std:.4f}, Min: {centroid_min:.4f}, Max: {centroid_max:.4f}")
+    
+    # Compare with previous centroid if available
+    if previous_centroid is not None:
+        # Calculate cosine similarity
+        current_flat = current_centroid.view(-1)
+        previous_flat = previous_centroid.view(-1)
+        cos_sim = torch.nn.functional.cosine_similarity(current_flat, previous_flat, dim=0).item()
+        
+        # Calculate Euclidean distance
+        euclid_dist = torch.norm(current_centroid - previous_centroid).item()
+        
+        # Calculate relative change in norm
+        prev_norm = torch.norm(previous_centroid).item()
+        norm_change = (centroid_norm - prev_norm) / prev_norm if prev_norm > 0 else float('inf')
+        
+        logger.info(f"{epoch_str}Centroid change - Cosine sim: {cos_sim:.4f}, "
+                   f"Euclidean dist: {euclid_dist:.4f}, Norm change: {norm_change:.4f}")
+
+
 def train_model(
     source_systems,
     source_support_sets,
@@ -599,6 +640,7 @@ def train_model(
     best_loss = float('inf')
     best_f1 = 0.0
     final_centroid = None
+    previous_centroid = None
     save_path = None
     
     if output_model_dir:
@@ -663,6 +705,12 @@ def train_model(
         
         if logger:
             logger.info(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.4f}")
+            
+            # Log centroid information and changes since last epoch
+            if final_centroid is not None:
+                log_centroid_changes(final_centroid, previous_centroid, logger, epoch+1)
+                # Store current centroid for next epoch comparison
+                previous_centroid = final_centroid.clone()
         
         # Evaluate on target data
         if target_support_set and target_query_set:
@@ -862,13 +910,14 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
             if any(hasattr(inst, attr) for inst in target_query_set[:100]):
                 logger.info(f"Found alternative label attribute: '{attr}'")
         
-        normal_count = sum(1 for inst in target_query_set if getattr(inst, 'label', None) == 0 or 
-                           (isinstance(getattr(inst, 'label', None), str) and 
-                            getattr(inst, 'label', '').lower() in ['normal', 'negative', '0', 'norm', 'neg']))
-        
-        anomaly_count = sum(1 for inst in target_query_set if getattr(inst, 'label', None) == 1 or 
-                            (isinstance(getattr(inst, 'label', None), str) and 
-                             getattr(inst, 'label', '').lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']))
+        normal_count = sum(1 for inst in target_query_set if hasattr(inst, 'label') and 
+                           (inst.label == 0 or 
+                            (isinstance(inst.label, str) and 
+                             inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))
+        anomaly_count = sum(1 for inst in target_query_set if hasattr(inst, 'label') and 
+                           (inst.label == 1 or 
+                            (isinstance(inst.label, str) and 
+                             inst.label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos'])))
         
         logger.info(f"Query set label distribution: {normal_count} normal, {anomaly_count} anomalous")
         
@@ -898,13 +947,14 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
         support_batch = target_support_set[:min(len(target_support_set), batch_size * 2)]
         
         if logger:
-            normal_count = sum(1 for inst in query_batch if getattr(inst, 'label', None) == 0 or 
-                           (isinstance(getattr(inst, 'label', None), str) and 
-                            getattr(inst, 'label', '').lower() in ['normal', 'negative', '0', 'norm', 'neg']))
-            
-            anomaly_count = sum(1 for inst in query_batch if getattr(inst, 'label', None) == 1 or 
-                            (isinstance(getattr(inst, 'label', None), str) and 
-                             getattr(inst, 'label', '').lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']))
+            normal_count = sum(1 for inst in query_batch if hasattr(inst, 'label') and 
+                           (inst.label == 0 or 
+                            (isinstance(inst.label, str) and 
+                             inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))
+            anomaly_count = sum(1 for inst in query_batch if hasattr(inst, 'label') and 
+                            (inst.label == 1 or 
+                             (isinstance(inst.label, str) and 
+                              inst.label.lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos'])))
             
             logger.debug(f"Batch {i+1}/{num_batches}: Query batch has {normal_count} normal, {anomaly_count} anomalous")
             
@@ -950,6 +1000,61 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
                    f"Precision={metrics_avg['precision']:.4f}, "
                    f"Recall={metrics_avg['recall']:.4f}, "
                    f"F1={metrics_avg['f1']:.4f}")
+        
+        # Log centroid and threshold information during evaluation
+        for i, (support_batch, query_batch) in enumerate(zip(
+                [target_support_set[:batch_size]],
+                [target_query_set[:batch_size]]
+            )):
+            if support_batch:
+                # Filter normal instances for centroid calculation
+                normal_support = [inst for inst in support_batch if 
+                                 (hasattr(inst, 'label') and (inst.label == 0 or 
+                                 (isinstance(inst.label, str) and inst.label.lower() in ['normal', 'negative', '0', 'norm', 'neg'])))]
+                
+                if normal_support:
+                    if hasattr(encoder, 'vocab'):
+                        vocab = encoder.vocab
+                        # Compute centroid from support set
+                        support_tinst, _ = prepare_batch_for_training(normal_support, vocab, verbose=False)
+                        support_words = support_tinst.to(device)
+                        support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
+                        support_word_len = torch.sum(support_masks, dim=1).to(device)
+                        support_model_inputs = (support_words, support_masks, support_word_len)
+                        
+                        with torch.no_grad():
+                            _, _, support_embeddings = encoder(support_model_inputs)
+                            
+                        eval_centroid = torch.mean(support_embeddings, dim=0, keepdim=True)
+                        
+                        # Log centroid statistics
+                        centroid_norm = torch.norm(eval_centroid).item()
+                        centroid_mean = torch.mean(eval_centroid).item()
+                        centroid_std = torch.std(eval_centroid).item()
+                        centroid_min = torch.min(eval_centroid).item()
+                        centroid_max = torch.max(eval_centroid).item()
+                        
+                        logger.info(f"Evaluation centroid - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}, "
+                                   f"Std: {centroid_std:.4f}, Min: {centroid_min:.4f}, Max: {centroid_max:.4f}")
+                        
+                        # Optionally log distances for debugging separation
+                        if query_batch:
+                            query_tinst, _ = prepare_batch_for_training(query_batch, vocab, verbose=False)
+                            query_words = query_tinst.to(device)
+                            query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
+                            query_word_len = torch.sum(query_masks, dim=1).to(device)
+                            query_model_inputs = (query_words, query_masks, query_word_len)
+                            
+                            with torch.no_grad():
+                                _, _, query_embeddings = encoder(query_model_inputs)
+                                distances = torch.norm(query_embeddings - eval_centroid, dim=1)
+                                
+                            # Log distance statistics
+                            logger.info(f"Distance stats - Mean: {torch.mean(distances).item():.4f}, "
+                                       f"Std: {torch.std(distances).item():.4f}, "
+                                       f"Min: {torch.min(distances).item():.4f}, "
+                                       f"Max: {torch.max(distances).item():.4f}")
+                break  # Only process the first batch
         
     return metrics_avg
 

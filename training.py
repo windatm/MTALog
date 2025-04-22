@@ -564,7 +564,10 @@ def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None
     """
     if logger is None:
         return
-        
+    
+    # Check if logger level is set to show detailed information
+    show_detailed = logger.level <= 20  # DEBUG or INFO level
+    
     # Get basic centroid stats
     centroid_norm = torch.norm(current_centroid).item()
     centroid_mean = torch.mean(current_centroid).item()
@@ -573,8 +576,11 @@ def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None
     centroid_max = torch.max(current_centroid).item()
     
     epoch_str = f"Epoch {epoch} - " if epoch is not None else ""
-    logger.info(f"{epoch_str}Centroid stats - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}, "
-               f"Std: {centroid_std:.4f}, Min: {centroid_min:.4f}, Max: {centroid_max:.4f}")
+    logger.debug(f"{epoch_str}Centroid stats - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}, "
+              f"Std: {centroid_std:.4f}, Min: {centroid_min:.4f}, Max: {centroid_max:.4f}")
+    
+    # Always log important summary of centroid at INFO level
+    logger.info(f"{epoch_str}Centroid summary - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}")
     
     # Compare with previous centroid if available
     if previous_centroid is not None:
@@ -590,8 +596,11 @@ def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None
         prev_norm = torch.norm(previous_centroid).item()
         norm_change = (centroid_norm - prev_norm) / prev_norm if prev_norm > 0 else float('inf')
         
-        logger.info(f"{epoch_str}Centroid change - Cosine sim: {cos_sim:.4f}, "
-                   f"Euclidean dist: {euclid_dist:.4f}, Norm change: {norm_change:.4f}")
+        logger.debug(f"{epoch_str}Centroid change - Cosine sim: {cos_sim:.4f}, "
+                  f"Euclidean dist: {euclid_dist:.4f}, Norm change: {norm_change:.4f}")
+        
+        # Always log important summary of changes at INFO level
+        logger.info(f"{epoch_str}Centroid change summary - Cosine sim: {cos_sim:.4f}, Norm change: {norm_change:.2%}")
 
 
 def train_model(

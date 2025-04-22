@@ -14,6 +14,8 @@ from collections import OrderedDict
 import random
 import pickle
 import numpy as np
+import logging
+import sys
 
 # Third-party
 import matplotlib.pyplot as plt
@@ -24,7 +26,9 @@ from CONSTANTS import DEVICE, PROJECT_ROOT, SESSION
 from models.gru import AttGRUModel
 from module.Common import data_iter, generate_tinsts_binary_label
 from module.Optimizer import Optimizer
-from preprocessing.datacutter.SimpleCutting import cut_by, fewshot_split, sample_query_set, cut_all
+from preprocessing.datacutter.SimpleCutting import (
+    cut_by, cut_all, cut_sequential, fewshot_split, sample_query_set, create_query_set
+)
 from representations.templates.statistics import Template_TF_IDF_without_clean
 from utils.vocab import Vocab
 from utils.common import get_model_and_result_paths
@@ -35,6 +39,7 @@ from utils.data import (
     encode_query_with_fallback,
 )
 from preprocessing.Preprocess import Preprocessor
+from entities.statistics import ResultStatistics
 
 
 def setup_params():
@@ -164,47 +169,45 @@ def process_source_systems(params, logger, template_encoder):
     for source_system in params["source_systems"]:
         logger.info(f"=== [SOURCE] Processing system: {source_system} ===")
         
-        # Define cache files
+        # Define cache files for this source system
         data_cache_file = os.path.join(cache_dir, f"{source_system}_{params['parser']}_data.pkl")
         encoder_cache_file = os.path.join(cache_dir, f"{source_system}_{params['parser']}_encoder.pkl")
         
-        # Try to load from cache first
+        # Check if cached data exists for this source system
+        processor = None
+        train_data = []
+        encoded_data = []
+        vocab = None
+        encoder = None
+        support_set = []
+        query_set = []
+        
         data_loaded = False
         if os.path.exists(data_cache_file) and os.path.exists(encoder_cache_file):
             try:
-                # Load preprocessed data
+                # Load data cache
                 with open(data_cache_file, 'rb') as f:
-                    cache_data = pickle.load(f)
-                    train_data = cache_data['train_data']
-                    processor = cache_data['processor']
-                    vocab = cache_data['vocab']
+                    data_cache = pickle.load(f)
+                    train_data = data_cache.get('train_data', [])
+                    processor = data_cache.get('processor', None)
                 
-                # Load encoder and encoded data
+                # Load encoder cache
                 with open(encoder_cache_file, 'rb') as f:
                     encoder_cache = pickle.load(f)
-                    encoder = encoder_cache['encoder']
-                    support_set = encoder_cache['support_set']
-                    query_set = encoder_cache['query_set']
+                    encoder = encoder_cache.get('encoder', None)
+                    support_set = encoder_cache.get('support_set', [])
+                    query_set = encoder_cache.get('query_set', [])
+                    vocab = encoder_cache.get('vocab', None)
                 
-                # Validate data exists
-                if train_data and len(train_data) > 0:
-                    logger.info(f"[{source_system}] Loaded from cache: {len(train_data)} instances")
-                    
-                    # Count normal and abnormal logs
-                    normal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
-                    abnormal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
-                    
-                    if len(normal_logs) == 0 and len(abnormal_logs) == 0:
-                        logger.warning(f"[{source_system}] No valid logs found in cache. Reprocessing...")
-                        os.remove(data_cache_file)
-                        os.remove(encoder_cache_file)
-                    else:
-                        logger.info(f"[{source_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs")
-                        data_loaded = True
+                # Validate loaded data
+                if train_data and encoder and support_set and query_set and vocab:
+                    logger.info(f"[{source_system}] Loaded {len(train_data)} instances from cache")
+                    data_loaded = True
                 else:
-                    logger.warning(f"[{source_system}] Cache data validation failed. Reprocessing...")
+                    logger.warning(f"[{source_system}] Cache validation failed. Reprocessing...")
                     os.remove(data_cache_file)
-                    os.remove(encoder_cache_file)
+                    if os.path.exists(encoder_cache_file):
+                        os.remove(encoder_cache_file)
             except Exception as e:
                 logger.warning(f"[{source_system}] Error loading cache: {str(e)}. Reprocessing...")
                 if os.path.exists(data_cache_file):
@@ -214,41 +217,42 @@ def process_source_systems(params, logger, template_encoder):
         
         # Process if not loaded from cache
         if not data_loaded:
-            # Step 1: Preprocess full data (normal + abnormal)
-            cut_func = cut_by(train=1.0, val=0.0, anomalous_rate=1.0)
-            train_data, _, _, processor = preprocess_data(
+            logger.info(f"[{source_system}] Processing from scratch...")
+            
+            # Step 1: Define data splitting function
+            cut_func = cut_by(train=0.8, val=0.1, anomalous_rate=1.0, random_seed=42)
+            
+            # Step 2: Process the data
+            train_data, valid_data, test_data, processor = preprocess_data(
                 dataset=source_system,
                 parser=params["parser"],
                 cut_func=cut_func,
                 template_encoder=template_encoder
             )
-            normal_count = sum(1 for inst in train_data if inst.label == 0)
-            anomaly_count = len(train_data) - normal_count
-            logger.info(f"[{source_system}] Processed {len(train_data)} instances: {normal_count} normal, {anomaly_count} anomaly")
             
-            # Step 2: Load vocabulary
+            # Step 3: Build a vocabulary 
             vocab = Vocab()
-            vocab.load_from_dict(processor.embedding)
+            if processor and processor.embedding:
+                vocab.load_from_dict(processor.embedding)
+                logger.info(f"[{source_system}] Built vocabulary with {vocab.vocab_size} templates")
+            else:
+                logger.warning(f"[{source_system}] No embeddings found in processor, using empty vocabulary")
             
-            # Save preprocessed data to cache
-            data_cache = {
-                'train_data': train_data,
-                'processor': processor,
-                'vocab': vocab
-            }
-            with open(data_cache_file, 'wb') as f:
-                pickle.dump(data_cache, f)
-            
-            # Step 3: Initialize encoder
+            # Step 4: Initialize and train the encoder
             encoder = AttGRUModel(
                 vocab=vocab,
                 lstm_layers=params["num_layers"],
                 lstm_hiddens=params["lstm_hidden_units"],
-                dropout=params["dropout_rate"],
+                dropout=params["dropout_rate"]
             ).to(DEVICE)
             
-            # Step 4: Encode all log instances
-            encoded_data = encode_log_sequences_with_gru(encoder, vocab, train_data, batch_size=params["batch_size"])
+            # Encode the data using the encoder
+            encoded_data = encode_log_sequences_with_gru(
+                model=encoder,
+                vocab=vocab,
+                instances=train_data,
+                batch_size=params["batch_size"]
+            )
             
             # If encoding failed, use fallback with zero vectors
             if not encoded_data:
@@ -260,6 +264,7 @@ def process_source_systems(params, logger, template_encoder):
                 encoded_data = train_data
             
             # Step 5: Split into support/query
+            # For source systems, split data randomly into support/query
             random.shuffle(encoded_data)
             split_index = int(0.5 * len(encoded_data))
             support_set = encoded_data[:split_index]
@@ -277,6 +282,16 @@ def process_source_systems(params, logger, template_encoder):
                 'query_set': query_set,
                 'vocab': vocab
             }
+            
+            # Save data to cache
+            data_cache = {
+                'train_data': train_data,
+                'processor': processor
+            }
+            
+            with open(data_cache_file, 'wb') as f:
+                pickle.dump(data_cache, f)
+                
             with open(encoder_cache_file, 'wb') as f:
                 pickle.dump(encoder_cache, f)
         
@@ -290,20 +305,35 @@ def process_source_systems(params, logger, template_encoder):
         logger.info(f"[{source_system}] Support set: {len(support_set)} | Query set: {len(query_set)}")
     
     # Create combined vocabulary from all source systems
+    # This is the key part for the requirement to combine vocabularies from all sources
     combined_vocab = Vocab()
     
-    # First initialize with template encoder embeddings
-    combined_vocab.load_from_dict(template_encoder.get_embeddings())
+    # First initialize with template encoder embeddings as base
+    if hasattr(template_encoder, 'get_embeddings') and callable(getattr(template_encoder, 'get_embeddings')):
+        combined_vocab.load_from_dict(template_encoder.get_embeddings())
+        logger.info(f"Initialized combined vocab with {combined_vocab.vocab_size} base templates")
     
-    # Then add templates from each source system vocabulary
-    for system, vocab in source_vocabularies.items():
-        if hasattr(vocab, 'id_to_word') and vocab.id_to_word:
-            for word_id, word in vocab.id_to_word.items():
-                if word not in combined_vocab.word_to_id:
-                    # Only add if not already in combined vocab
-                    combined_vocab.add_word(word)
+    # Collect all source embeddings
+    all_embeddings = {}
     
-    logger.info(f"Created combined vocabulary with {combined_vocab.vocab_size} templates")
+    # Add templates from all source processors
+    for system, processor in source_processors.items():
+        if processor and hasattr(processor, 'embedding') and processor.embedding:
+            # Add all embeddings from this source to combined dictionary
+            for template_id, embedding in processor.embedding.items():
+                if template_id not in all_embeddings:
+                    all_embeddings[template_id] = embedding
+            
+            logger.info(f"Added {len(processor.embedding)} templates from {system}")
+    
+    # Now load the combined embeddings
+    if all_embeddings:
+        # Create a new Vocab with all combined embeddings
+        combined_vocab = Vocab()
+        combined_vocab.load_from_dict(all_embeddings)
+        logger.info(f"Created combined vocabulary with {combined_vocab.vocab_size} templates from all sources")
+    else:
+        logger.warning("No source embeddings found to combine")
     
     # Return results
     result_data = {
@@ -354,25 +384,20 @@ def process_target_system(params, logger, template_encoder, source_data):
     data_loaded = False
     if os.path.exists(data_cache_file) and os.path.exists(encoder_cache_file):
         try:
-            # Load preprocessed data
+            # Load data
             with open(data_cache_file, 'rb') as f:
-                cache_data = pickle.load(f)
-                train_data = cache_data['train_data']
-                test_data = cache_data['test_data']
-                processor = cache_data['processor']
-            
-            # Load encoded data
+                data_cache = pickle.load(f)
+                train_data = data_cache.get('train_data', [])
+                test_data = data_cache.get('test_data', [])
+                processor = data_cache.get('processor', None)
+                
+            # Load encoder and sets
             with open(encoder_cache_file, 'rb') as f:
                 encoder_cache = pickle.load(f)
-                encoder = encoder_cache['encoder']
-                support_set = encoder_cache['support_set']
-                query_set = encoder_cache['query_set']
-                support_templates = encoder_cache['support_templates']
+                encoder = encoder_cache.get('encoder', None)
+                support_set = encoder_cache.get('support_set', [])
+                query_set = encoder_cache.get('query_set', [])
                 
-                # Restore vocab if it was saved
-                if 'vocab' in encoder_cache and not hasattr(encoder, 'vocab'):
-                    encoder.vocab = encoder_cache['vocab']
-            
             # Validate data exists (less strict)
             if train_data and support_set:
                 logger.info(f"[{target_system}] Loaded from cache: {len(train_data)} instances")
@@ -400,31 +425,34 @@ def process_target_system(params, logger, template_encoder, source_data):
             if os.path.exists(encoder_cache_file):
                 os.remove(encoder_cache_file)
     
-    # Process if not loaded from cache
+    # Process data if not loaded from cache
     if not data_loaded:
-        # Step 1: Preprocess the target dataset
-        processor = Preprocessor()
-        train_data, _, test_data = processor.process(
+        logger.info(f"[{target_system}] Processing from scratch...")
+        
+        # Step 1: Define data splitting function (100% train, no val, include all anomalies)
+        cut_func = cut_by(train=1.0, val=0.0, anomalous_rate=1.0, random_seed=42)
+        
+        # Step 2: Preprocess logs
+        train_data, _, test_data, processor = preprocess_data(
             dataset=target_system,
-            parsing=params["parser"],
-            template_encoding=template_encoder.present,
-            cut_func=cut_all
+            parser=params["parser"],
+            cut_func=cut_func,
+            template_encoder=template_encoder
         )
-        normal_count = sum(1 for inst in train_data if inst.label == 0)
-        anomaly_count = len(train_data) - normal_count
-        logger.info(f"[{target_system}] Processed {len(train_data)} instances: {normal_count} normal, {anomaly_count} anomaly")
         
-        # Step 2: Split data with few-shot learning
-        # Handle both numeric and string labels for normal logs
-        normal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 0 or x.label == "Normal")]
-        abnormal_logs = [x for x in train_data if hasattr(x, 'label') and (x.label == 1 or x.label == "Anomalous")]
+        logger.info(f"[{target_system}] Processed {len(train_data)} logs, {len(test_data)} test instances")
         
-        logger.info(f"[{target_system}] Found {len(normal_logs)} normal logs and {len(abnormal_logs)} abnormal logs")
+        # Separate normal and abnormal logs from all data
+        normal_logs = []
+        abnormal_logs = []
+        for inst in train_data:
+            label = getattr(inst, 'label', None)
+            if label == "Normal" or label == 0:
+                normal_logs.append(inst)
+            else:
+                abnormal_logs.append(inst)
         
-        # Handle the case when some logs don't have a label attribute
-        unlabeled = [x for x in train_data if not hasattr(x, 'label')]
-        if unlabeled:
-            logger.warning(f"[{target_system}] Found {len(unlabeled)} logs without a label attribute")
+        logger.info(f"[{target_system}] Found {len(normal_logs)} normal and {len(abnormal_logs)} abnormal logs")
         
         # Handle case when no normal logs exist
         if not normal_logs:
@@ -438,20 +466,21 @@ def process_target_system(params, logger, template_encoder, source_data):
         else:
             # Proper few-shot learning approach:
             # Step 1: Get support set from normal logs ONLY based on few_shot_ratio
+            # Modified: Ensure support_set contains ONLY normal logs
             support_set, remaining_normal = fewshot_split(normal_logs, params["few_shot_ratio"])
             
             logger.info(f"[{target_system}] Support set (normal logs only): {len(support_set)}")
             logger.info(f"[{target_system}] Remaining normal logs: {len(remaining_normal)}")
             
             # Step 2: Query set should contain BOTH remaining normal logs AND abnormal logs
-            query_set = []
-            if remaining_normal:
-                # Sample from remaining normal logs
-                sampled_normal = sample_query_set(remaining_normal, params["query_sample_ratio"])
-                query_set.extend(sampled_normal)
-            
-            # Add abnormal logs to query set (not to support set)
-            query_set.extend(abnormal_logs)
+            # Use the new create_query_set function to create a query set with both normal and malicious data
+            query_set = create_query_set(
+                remaining_normal=remaining_normal,
+                malicious_instances=abnormal_logs,
+                normal_ratio=0.5,  # Equal balance between normal and malicious
+                sample_ratio=params["query_sample_ratio"],
+                random_seed=42
+            )
             
             logger.info(f"[{target_system}] Query set (combined normal and abnormal): {len(query_set)}")
             
@@ -467,18 +496,17 @@ def process_target_system(params, logger, template_encoder, source_data):
         for inst in support_set:
             if hasattr(inst, 'template_ids'):
                 support_templates.update(inst.template_ids)
+            elif hasattr(inst, 'sequence'):
+                support_templates.update(inst.sequence)
         
         logger.info(f"[{target_system}] Found {len(support_templates)} unique templates in support set")
         
-        # Step 4: Initialize encoder with combined vocabulary
-        # Since the vocabulary is already combined from source systems in the source_data
-        # we use it directly. The combined_vocab already includes template IDs from source systems.
+        # Step 4: Initialize encoder with combined vocabulary from all sources
+        # This ensures the vocabulary is a combination of all source vocabularies
         target_vocab = combined_vocab
         
-        # Now we need to add any templates from the support set that aren't already in the vocab
-        # This would depend on how your Vocab class is implemented
-        # For now, we'll just log that we're using the combined vocabulary
-        logger.info(f"[{target_system}] Using vocabulary with {target_vocab.vocab_size} templates")
+        # Log vocabulary size
+        logger.info(f"[{target_system}] Using combined vocabulary with {target_vocab.vocab_size} templates")
         
         # Step 5: Initialize encoder
         encoder = AttGRUModel(
@@ -499,41 +527,74 @@ def process_target_system(params, logger, template_encoder, source_data):
         if hasattr(encoder, 'vocab'):
             vocab_backup = encoder.vocab
             delattr(encoder, 'vocab')
+            
+        # Step 6: Encode support set using the encoder
+        encoded_support_set = encode_log_sequences_with_gru(
+            model=encoder,
+            vocab=target_vocab,
+            instances=support_set,
+            batch_size=params["batch_size"],
+            show_progress=True
+        )
+        logger.info(f"[{target_system}] Encoded {len(encoded_support_set)}/{len(support_set)} instances in support set")
         
-        # Save data to cache
+        # Step 7: Encode query set (with fallback for unknown templates)
+        encoded_query_set = encode_query_with_fallback(
+            query_set=query_set,
+            encoder_target=encoder,
+            vocab_target=target_vocab,
+            source_encoders=source_data["source_encoders"],
+            similarity_threshold=0.75
+        )
+        logger.info(f"[{target_system}] Encoded {len(encoded_query_set)}/{len(query_set)} instances in query set")
+        
+        # Restore vocab attribute for encoder
+        if vocab_backup is not None:
+            encoder.vocab = vocab_backup
+        
+        # Calculate class distribution
+        normal_count = sum(1 for inst in encoded_query_set if getattr(inst, 'label', None) == 0 or 
+                         (isinstance(getattr(inst, 'label', None), str) and 
+                          getattr(inst, 'label', '').lower() in ['normal', 'negative', '0', 'norm', 'neg']))
+        
+        anomaly_count = sum(1 for inst in encoded_query_set if getattr(inst, 'label', None) == 1 or 
+                          (isinstance(getattr(inst, 'label', None), str) and 
+                           getattr(inst, 'label', '').lower() in ['anomalous', 'anomaly', 'positive', '1', 'anom', 'pos']))
+        
+        logger.info(f"[{target_system}] Query set distribution: {normal_count} normal, {anomaly_count} anomalous")
+        
+        # Save data and model to cache
         data_cache = {
             'train_data': train_data,
             'test_data': test_data,
             'processor': processor
         }
-        with open(data_cache_file, 'wb') as f:
-            pickle.dump(data_cache, f)
         
-        # Save encoded data to cache
         encoder_cache = {
             'encoder': encoder,
-            'support_set': support_set,
-            'query_set': query_set,
-            'support_templates': support_templates,
-            'vocab': vocab_backup
+            'support_set': encoded_support_set,
+            'query_set': encoded_query_set
         }
+        
+        with open(data_cache_file, 'wb') as f:
+            pickle.dump(data_cache, f)
+            
         with open(encoder_cache_file, 'wb') as f:
             pickle.dump(encoder_cache, f)
             
-        # Restore vocab attribute
-        if vocab_backup is not None:
-            encoder.vocab = vocab_backup
+        # Update support and query sets to encoded versions
+        support_set = encoded_support_set
+        query_set = encoded_query_set
     
-    # Return the processed data
+    # Return processed data
     return {
-        "target_preprocessor": processor if processor is not None else Preprocessor(),
         "target_vocab": target_vocab,
         "target_encoder": encoder,
-        "target_support_set": support_set,
-        "target_query_set": query_set,
-        "target_inst_train": train_data,
-        "target_inst_test": test_data,
-        "support_templates": support_templates
+        "support_set": support_set,
+        "query_set": query_set,
+        "train_data": train_data,
+        "test_data": test_data,
+        "processor": processor
     }
 
 
@@ -575,8 +636,8 @@ def train_model(params, logger, source_data, target_data):
         
         # Meta-testing on target dataset
         logger.info(f"Meta-testing on {params['target_system']}")
-        target_support_set = target_data["target_support_set"]
-        target_query_set = target_data["target_query_set"]
+        target_support_set = target_data["support_set"]
+        target_query_set = target_data["query_set"]
         
         # Testing logic would go here
         # Using outer_weight to scale meta-test loss
@@ -606,7 +667,7 @@ def evaluate_model(params, logger, source_data, target_data):
     # Actual load logic would go here
     
     # Evaluate on test set
-    test_set = target_data["target_inst_test"]
+    test_set = target_data["test_data"]
     
     # Evaluation logic here
     # This would include:
@@ -658,19 +719,19 @@ def main():
             logger.warning(f"Source system {source_system} has imbalanced classes: {source_normal} normal, {source_anomaly} anomaly")
     
     # Check target dataset
-    target_normal = sum(1 for inst in target_data["target_support_set"] if hasattr(inst, 'label') and 
+    target_normal = sum(1 for inst in target_data["support_set"] if hasattr(inst, 'label') and 
                       (inst.label == 0 or inst.label == "Normal"))
-    target_anomaly = sum(1 for inst in target_data["target_support_set"] if hasattr(inst, 'label') and 
+    target_anomaly = sum(1 for inst in target_data["support_set"] if hasattr(inst, 'label') and 
                        (inst.label == 1 or inst.label == "Anomalous"))
     
-    logger.info(f"Target support set: {len(target_data['target_support_set'])} instances, {target_normal} normal, {target_anomaly} anomaly")
+    logger.info(f"Target support set: {len(target_data['support_set'])} instances, {target_normal} normal, {target_anomaly} anomaly")
     
     # If target has no anomalies, create synthetic ones
     if target_anomaly == 0 and target_normal > 0:
         logger.warning("Target dataset has no anomalies. Creating synthetic anomalies...")
         
         # Get normal instances to convert to anomalies
-        normal_instances = [inst for inst in target_data["target_support_set"] if hasattr(inst, 'label') and 
+        normal_instances = [inst for inst in target_data["support_set"] if hasattr(inst, 'label') and 
                          (inst.label == 0 or inst.label == "Normal")]
         
         # Create synthetic anomalies by altering normal instances
@@ -701,28 +762,28 @@ def main():
             synthetic_anomalies.append(synth_inst)
         
         # Add synthetic anomalies to both support and query sets
-        target_data["target_support_set"].extend(synthetic_anomalies)
-        target_data["target_query_set"].extend(synthetic_anomalies)
+        target_data["support_set"].extend(synthetic_anomalies)
+        target_data["query_set"].extend(synthetic_anomalies)
         
         # Add to test data as well to ensure balanced evaluation
-        target_data["target_inst_test"].extend(synthetic_anomalies)
+        target_data["test_data"].extend(synthetic_anomalies)
         
         logger.warning(f"Added {len(synthetic_anomalies)} synthetic anomalies to target dataset")
         
         # Recalculate counts
-        target_normal = sum(1 for inst in target_data["target_support_set"] if hasattr(inst, 'label') and 
+        target_normal = sum(1 for inst in target_data["support_set"] if hasattr(inst, 'label') and 
                          (inst.label == 0 or inst.label == "Normal"))
-        target_anomaly = sum(1 for inst in target_data["target_support_set"] if hasattr(inst, 'label') and 
+        target_anomaly = sum(1 for inst in target_data["support_set"] if hasattr(inst, 'label') and 
                           (inst.label == 1 or inst.label == "Anomalous"))
         
-        logger.info(f"Updated target support set: {len(target_data['target_support_set'])} instances, {target_normal} normal, {target_anomaly} anomaly")
+        logger.info(f"Updated target support set: {len(target_data['support_set'])} instances, {target_normal} normal, {target_anomaly} anomaly")
     
     # Similarly, check if there are no normal instances (rare but possible)
     if target_normal == 0 and target_anomaly > 0:
         logger.warning("Target dataset has no normal instances. Creating synthetic normal instances...")
         
         # Get anomaly instances to convert to normal
-        anomaly_instances = [inst for inst in target_data["target_support_set"] if hasattr(inst, 'label') and 
+        anomaly_instances = [inst for inst in target_data["support_set"] if hasattr(inst, 'label') and 
                           (inst.label == 1 or inst.label == "Anomalous")]
         
         # Create synthetic normal instances
@@ -755,9 +816,9 @@ def main():
             synthetic_normal.append(synth_inst)
         
         # Add synthetic normal instances to all sets
-        target_data["target_support_set"].extend(synthetic_normal)
-        target_data["target_query_set"].extend(synthetic_normal)
-        target_data["target_inst_test"].extend(synthetic_normal)
+        target_data["support_set"].extend(synthetic_normal)
+        target_data["query_set"].extend(synthetic_normal)
+        target_data["test_data"].extend(synthetic_normal)
         
         logger.warning(f"Added {len(synthetic_normal)} synthetic normal instances to target dataset")
     

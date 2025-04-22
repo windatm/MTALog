@@ -95,23 +95,75 @@ def fewshot_split(instances, normal_ratio):
         normal_ratio (float): normal sample ratio for support set.
 
     Returns:
-        tuple: (support_set, query_set)
+        tuple: (support_set, remaining_normal)
     """
     # Handle both string and numeric labels
     normal_blocks = [ins for ins in instances if getattr(ins, 'label', None) == "Normal" or getattr(ins, 'label', None) == 0]
+    
+    # Make sure we have at least one sample
     k = max(1, int(normal_ratio * len(normal_blocks)))
 
+    # Shuffle the normal blocks for random selection
     np.random.shuffle(normal_blocks)
+    
+    # Select k samples for support set (ONLY normal samples)
     support_set = normal_blocks[:k]
     
     # Create a set of IDs from the support set for fast lookup
     support_ids = {getattr(ins, 'id', id(ins)) for ins in support_set}
     
     # Return all normal instances that are not in the support set
-    # We only return normal instances because the function is splitting normal logs
     remaining_normal = [ins for ins in normal_blocks if getattr(ins, 'id', id(ins)) not in support_ids]
     
     return support_set, remaining_normal
+
+
+def create_query_set(remaining_normal, malicious_instances, normal_ratio=0.5, sample_ratio=1.0, random_seed=None):
+    """
+    Create a query set that includes both normal and malicious data.
+    
+    Args:
+        remaining_normal (list[Instance]): Normal instances not used in support set.
+        malicious_instances (list[Instance]): Malicious/anomalous instances.
+        normal_ratio (float): Ratio of normal instances to include in query set.
+        sample_ratio (float): Overall sampling ratio from total available instances.
+        random_seed (int, optional): Random seed for reproducibility.
+        
+    Returns:
+        list[Instance]: Combined query set with both normal and malicious instances.
+    """
+    if random_seed is not None:
+        np.random.seed(random_seed)
+    
+    # Sample from normal instances
+    normal_sample_size = max(1, int(len(remaining_normal) * normal_ratio * sample_ratio))
+    normal_sample_size = min(normal_sample_size, len(remaining_normal))
+    
+    if normal_sample_size > 0 and remaining_normal:
+        normal_indices = np.random.choice(len(remaining_normal), size=normal_sample_size, replace=False)
+        sampled_normal = [remaining_normal[i] for i in normal_indices]
+    else:
+        sampled_normal = []
+    
+    # Sample from malicious instances
+    malicious_sample_size = max(1, int(len(malicious_instances) * sample_ratio))
+    malicious_sample_size = min(malicious_sample_size, len(malicious_instances))
+    
+    if malicious_sample_size > 0 and malicious_instances:
+        malicious_indices = np.random.choice(len(malicious_instances), size=malicious_sample_size, replace=False)
+        sampled_malicious = [malicious_instances[i] for i in malicious_indices]
+    else:
+        sampled_malicious = []
+    
+    # Combine the samples
+    query_set = sampled_normal + sampled_malicious
+    
+    # Shuffle the final query set to mix normal and malicious instances
+    np.random.shuffle(query_set)
+    
+    logger.info(f"Created query set with {len(sampled_normal)} normal and {len(sampled_malicious)} malicious instances")
+    
+    return query_set
 
 
 def sample_query_set(query_set, sample_ratio=0.1, random_seed=None):

@@ -74,6 +74,58 @@ class Vocab(object):
         # logger.info(f"Vocab info: #output tags {self.tag_size}")
         self._embed_dim = 0
         self.embeddings = None
+        self._id2word = []
+        self._word2id = {}
+        # Initialize special tokens
+        for special_word in ["<pad>", "<bos>", "<eos>", "<oov>"]:
+            self._id2word.append(special_word)
+        self._word2id = {word: idx for idx, word in enumerate(self._id2word)}
+
+    def add_word(self, word, embedding=None):
+        """
+        Add a new word to the vocabulary.
+        
+        Args:
+            word (str): The word to add.
+            embedding (np.ndarray, optional): The embedding vector for this word.
+                If not provided and embeddings exist, a random embedding will be generated.
+                
+        Returns:
+            int: The ID assigned to the word.
+        """
+        # If word already exists, return its ID
+        if word in self._word2id:
+            return self._word2id[word]
+            
+        # Add word to vocabulary
+        word_id = len(self._id2word)
+        self._id2word.append(word)
+        self._word2id[word] = word_id
+        
+        # If embedding is provided and embeddings exist, expand embeddings matrix
+        if self.embeddings is not None:
+            if embedding is not None:
+                # Ensure embedding has correct dimension
+                if len(embedding) != self._embed_dim:
+                    logger.warning(f"Embedding dimension mismatch: expected {self._embed_dim}, got {len(embedding)}")
+                    if self._embed_dim > 0:
+                        # Generate random embedding matching the dimension
+                        embedding = np.random.uniform(-0.25, 0.25, self._embed_dim)
+                
+                # Expand embeddings array to include new word
+                if self._embed_dim > 0:
+                    new_embeddings = np.zeros((len(self._id2word), self._embed_dim))
+                    new_embeddings[:len(self.embeddings)] = self.embeddings
+                    new_embeddings[word_id] = embedding
+                    self.embeddings = new_embeddings
+            elif self._embed_dim > 0:
+                # Generate random embedding if none provided
+                new_embeddings = np.zeros((len(self._id2word), self._embed_dim))
+                new_embeddings[:len(self.embeddings)] = self.embeddings
+                new_embeddings[word_id] = np.random.uniform(-0.25, 0.25, self._embed_dim)
+                self.embeddings = new_embeddings
+        
+        return word_id
 
     def load_from_dict(self, id2embed):
         """
@@ -122,6 +174,43 @@ class Vocab(object):
             logger.info("Goes wrong when calculating UNK emb!")
         embeddings[self.UNK] = embeddings[self.UNK] / word_num
         self.embeddings = embeddings
+        
+    def merge_vocab(self, other_vocab):
+        """
+        Merge another vocabulary into this one, combining their words and embeddings.
+        
+        Args:
+            other_vocab (Vocab): Another vocabulary object to merge with this one.
+        """
+        if not isinstance(other_vocab, Vocab):
+            logger.error("Can only merge with another Vocab instance")
+            return
+            
+        # Nothing to merge if other vocab has no embeddings
+        if not hasattr(other_vocab, 'embeddings') or other_vocab.embeddings is None:
+            return
+            
+        # Initialize embeddings if needed
+        if self.embeddings is None:
+            self._embed_dim = other_vocab._embed_dim
+            self.embeddings = np.zeros((len(self._id2word), self._embed_dim))
+            
+        # Check embedding dimensions match
+        if self._embed_dim != other_vocab._embed_dim:
+            logger.error(f"Cannot merge vocabularies with different embedding dimensions: {self._embed_dim} vs {other_vocab._embed_dim}")
+            return
+            
+        # Add words from other vocab
+        for word_id, word in enumerate(other_vocab._id2word):
+            # Skip special tokens
+            if word_id < 4:
+                continue
+                
+            if word not in self._word2id:
+                # Get embedding from other vocab
+                embedding = other_vocab.embeddings[word_id]
+                # Add to this vocab
+                self.add_word(word, embedding)
 
     def load_pretrained_embs(self, embfile):
         """

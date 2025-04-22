@@ -10,6 +10,7 @@ import numpy as np
 import random
 from collections import defaultdict
 import traceback
+import os
 
 from utils.data_processing import (
     prepare_batch_for_training
@@ -463,9 +464,166 @@ def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='
     return 0.0, metrics
 
 
-def train_model(source_support_set, source_query_set, encoder, optimizer, device, epochs=10, batch_size=32, logger=None, save_path=None):
+def train_model(
+    source_systems,
+    source_support_sets,
+    source_query_sets,
+    target_support_set,
+    target_query_set,
+    source_encoders,
+    target_encoder,
+    optimizer,
+    device,
+    num_epochs=10,
+    batch_size=32,
+    output_model_dir=None,
+    logger=None
+):
     """
-    Train a model using meta-learning approach
+    Train a model using meta-learning approach with multiple source systems
+    
+    Args:
+        source_systems: List of source system names
+        source_support_sets: Dictionary mapping system names to support sets
+        source_query_sets: Dictionary mapping system names to query sets
+        target_support_set: Support set from target domain
+        target_query_set: Query set from target domain
+        source_encoders: Dictionary mapping system names to encoders
+        target_encoder: Target neural network encoder model
+        optimizer: Optimizer for parameter updates
+        device: Device to run computations on
+        num_epochs: Number of epochs to train
+        batch_size: Batch size for training
+        output_model_dir: Directory to save the model
+        logger: Logger for tracking training process
+    
+    Returns:
+        trained_encoder: Trained encoder model
+        best_f1: Best F1 score achieved during training
+    """
+    if logger:
+        logger.info(f"Training model with {len(source_systems)} source systems for {num_epochs} epochs")
+        
+    # Ensure model is on the correct device
+    target_encoder = target_encoder.to(device)
+    
+    best_loss = float('inf')
+    best_f1 = 0.0
+    final_centroid = None
+    save_path = None
+    
+    if output_model_dir:
+        os.makedirs(output_model_dir, exist_ok=True)
+        save_path = os.path.join(output_model_dir, "best_model.pt")
+    
+    for epoch in range(num_epochs):
+        epoch_loss = 0.0
+        batch_count = 0
+        
+        # Train on each source system
+        for system in source_systems:
+            if logger:
+                logger.info(f"Epoch {epoch+1}/{num_epochs} - Training on source system: {system}")
+            
+            source_support_set = source_support_sets[system]
+            source_query_set = source_query_sets[system]
+            
+            # Skip if no data
+            if not source_support_set or not source_query_set:
+                if logger:
+                    logger.warning(f"Skipping {system} - No data available")
+                continue
+                
+            # Shuffle data for this epoch
+            random.shuffle(source_support_set)
+            random.shuffle(source_query_set)
+            
+            # Create batches for training
+            support_batches = create_batches(source_support_set, batch_size)
+            query_batches = create_batches(source_query_set, batch_size)
+            
+            # Ensure we have the same number of batches
+            min_batches = min(len(support_batches), len(query_batches))
+            
+            # Iterate through batches
+            for i in range(min_batches):
+                support_batch = support_batches[i]
+                query_batch = query_batches[i]
+                
+                # Perform meta-training step
+                loss, centroid = meta_train_step(
+                    support_batch, 
+                    query_batch, 
+                    target_encoder, 
+                    optimizer, 
+                    device, 
+                    batch_size
+                )
+                
+                epoch_loss += loss
+                batch_count += 1
+                
+                # Store the latest centroid
+                final_centroid = centroid
+                
+                # Free memory
+                torch.cuda.empty_cache()
+        
+        # Calculate average loss for the epoch
+        avg_loss = epoch_loss / max(batch_count, 1)
+        
+        if logger:
+            logger.info(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.4f}")
+        
+        # Evaluate on target data
+        if target_support_set and target_query_set:
+            metrics = evaluate_model(
+                target_support_set=target_support_set,
+                target_query_set=target_query_set,
+                encoder=target_encoder,
+                device=device,
+                batch_size=batch_size,
+                logger=logger
+            )
+            
+            current_f1 = metrics['f1']
+            
+            if logger:
+                logger.info(f"Epoch {epoch+1}/{num_epochs} - Evaluation F1: {current_f1:.4f}")
+            
+            # Save the best model
+            if current_f1 > best_f1:
+                best_f1 = current_f1
+                if save_path:
+                    torch.save(target_encoder.state_dict(), save_path)
+                    if logger:
+                        logger.info(f"Saved best model with F1 {current_f1:.4f} to {save_path}")
+        else:
+            # If no target data available, save based on loss
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                if save_path:
+                    torch.save(target_encoder.state_dict(), save_path)
+                    if logger:
+                        logger.info(f"Saved best model with loss {avg_loss:.4f} to {save_path}")
+    
+    # Load best model if path specified
+    if save_path and os.path.exists(save_path):
+        target_encoder.load_state_dict(torch.load(save_path))
+    
+    # Attach the normal centroid to the encoder for later use
+    if final_centroid is not None:
+        target_encoder.normal_centroid = final_centroid
+    
+    if logger:
+        logger.info(f"Training completed. Best F1: {best_f1:.4f}")
+    
+    return target_encoder, best_f1
+
+
+def train_model_single(source_support_set, source_query_set, encoder, optimizer, device, epochs=10, batch_size=32, logger=None, save_path=None):
+    """
+    Train a model using meta-learning approach with a single source system
     
     Args:
         source_support_set: Support set from source domain

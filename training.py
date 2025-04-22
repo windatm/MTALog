@@ -259,6 +259,9 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         # Apply cluster loss to build tight normal cluster
         stage1_loss, normal_centroid = cluster_loss(support_embeddings)
         
+        # In thông tin về stage1_loss
+        print(f"Stage 1 - Cluster Loss: {stage1_loss.item():.4f}")
+        
         # Backward pass
         stage1_loss.backward(retain_graph=True)
         
@@ -290,6 +293,9 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         stage2_loss = contrastive_loss(query_embeddings, query_labels.to(device), 
                                       normal_centroid, margin=margin)
         
+        # In thông tin về stage2_loss
+        print(f"Stage 2 - Contrastive Loss: {stage2_loss.item():.4f}")
+        
         # Backward pass
         stage2_loss.backward()
         
@@ -298,6 +304,7 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         
         # Calculate total loss
         total_loss = stage1_loss.item() + stage2_loss.item()
+        print(f"Total Loss: {total_loss:.4f}")
         
         # Free memory
         del query_model_inputs, query_words, query_masks, query_word_len, query_embeddings, query_logits
@@ -559,15 +566,9 @@ def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None
     Args:
         current_centroid: Current centroid tensor
         previous_centroid: Previous centroid tensor from last epoch (can be None for first epoch)
-        logger: Logger instance
+        logger: Logger instance (can be None)
         epoch: Current epoch number (optional)
     """
-    if logger is None:
-        return
-    
-    # Check if logger level is set to show detailed information
-    show_detailed = logger.level <= 20  # DEBUG or INFO level
-    
     # Get basic centroid stats
     centroid_norm = torch.norm(current_centroid).item()
     centroid_mean = torch.mean(current_centroid).item()
@@ -576,11 +577,11 @@ def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None
     centroid_max = torch.max(current_centroid).item()
     
     epoch_str = f"Epoch {epoch} - " if epoch is not None else ""
-    logger.debug(f"{epoch_str}Centroid stats - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}, "
-              f"Std: {centroid_std:.4f}, Min: {centroid_min:.4f}, Max: {centroid_max:.4f}")
+    print(f"{epoch_str}Centroid stats - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}, "
+          f"Std: {centroid_std:.4f}, Min: {centroid_min:.4f}, Max: {centroid_max:.4f}")
     
-    # Always log important summary of centroid at INFO level
-    logger.info(f"{epoch_str}Centroid summary - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}")
+    # Always log important summary of centroid 
+    print(f"{epoch_str}Centroid summary - Norm: {centroid_norm:.4f}, Mean: {centroid_mean:.4f}")
     
     # Compare with previous centroid if available
     if previous_centroid is not None:
@@ -596,11 +597,11 @@ def log_centroid_changes(current_centroid, previous_centroid, logger, epoch=None
         prev_norm = torch.norm(previous_centroid).item()
         norm_change = (centroid_norm - prev_norm) / prev_norm if prev_norm > 0 else float('inf')
         
-        logger.debug(f"{epoch_str}Centroid change - Cosine sim: {cos_sim:.4f}, "
-                  f"Euclidean dist: {euclid_dist:.4f}, Norm change: {norm_change:.4f}")
+        print(f"{epoch_str}Centroid change - Cosine sim: {cos_sim:.4f}, "
+              f"Euclidean dist: {euclid_dist:.4f}, Norm change: {norm_change:.4f}")
         
-        # Always log important summary of changes at INFO level
-        logger.info(f"{epoch_str}Centroid change summary - Cosine sim: {cos_sim:.4f}, Norm change: {norm_change:.2%}")
+        # Always log important summary of changes
+        print(f"{epoch_str}Centroid change summary - Cosine sim: {cos_sim:.4f}, Norm change: {norm_change:.2%}")
 
 
 def train_model(
@@ -712,14 +713,17 @@ def train_model(
         # Calculate average loss for the epoch
         avg_loss = epoch_loss / max(batch_count, 1)
         
+        # In thông tin loss trung bình
+        print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.4f}")
+        
         if logger:
             logger.info(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.4f}")
             
-            # Log centroid information and changes since last epoch
-            if final_centroid is not None:
-                log_centroid_changes(final_centroid, previous_centroid, logger, epoch+1)
-                # Store current centroid for next epoch comparison
-                previous_centroid = final_centroid.clone()
+        # Log centroid information and changes since last epoch
+        if final_centroid is not None:
+            log_centroid_changes(final_centroid, previous_centroid, logger, epoch+1)
+            # Store current centroid for next epoch comparison
+            previous_centroid = final_centroid.clone()
         
         # Evaluate on target data
         if target_support_set and target_query_set:
@@ -1000,8 +1004,16 @@ def evaluate_model(target_support_set, target_query_set, encoder, device, batch_
     else:
         if logger:
             logger.warning("No valid batches were processed during evaluation")
+        print("Warning: No valid batches were processed during evaluation")
         metrics_avg = {"accuracy": 0, "precision": 0, "recall": 0, "f1": 0, 
                       "tp": 0, "fp": 0, "fn": 0, "tn": 0}
+    
+    # In kết quả đánh giá
+    print(f"Evaluation metrics: "
+           f"Accuracy={metrics_avg['accuracy']:.4f}, "
+           f"Precision={metrics_avg['precision']:.4f}, "
+           f"Recall={metrics_avg['recall']:.4f}, "
+           f"F1={metrics_avg['f1']:.4f}")
     
     if logger:
         logger.info(f"Evaluation metrics: "

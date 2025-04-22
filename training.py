@@ -255,7 +255,7 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
         stage1_loss, normal_centroid = cluster_loss(support_embeddings)
         
         # Backward pass
-        stage1_loss.backward()
+        stage1_loss.backward(retain_graph=True)
         
         # Free memory
         del support_model_inputs, support_words, support_masks, support_word_len

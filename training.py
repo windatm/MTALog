@@ -58,12 +58,10 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     if not hasattr(vocab, 'template_to_idx'):
         vocab.template_to_idx = lambda template: vocab.word2id(str(template))
     
-    # Process in smaller chunks to save memory
-    max_batch_size = min(batch_size, 32)  # Reduced batch size
     
     # Divide data into support and query
-    support_data = source_support_set[:max_batch_size]
-    query_data = source_query_set[:max_batch_size]
+    support_data = source_support_set[:batch_size]
+    query_data = source_query_set[:batch_size]
     
     # Prepare support data
     support_tinst, support_labels = prepare_batch_for_training(support_data, vocab, verbose=False)
@@ -167,10 +165,7 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     
     # Ensure vocab has template_to_idx method - silently add if needed
     if not hasattr(vocab, 'template_to_idx'):
-        vocab.template_to_idx = lambda template: vocab.word2id(str(template))
-    
-    # Process in smaller chunks to save memory
-    max_batch_size = min(batch_size, 32)  # Reduced batch size
+        vocab.template_to_idx = lambda template: vocab.word2id(str(template))# Reduced batch size
     
     # Log distribution of labels in support set
     if logger:
@@ -181,14 +176,14 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         logger.debug(f"Support set: {len(target_support_set)} instances, {normal_count} normal, {anomaly_count} anomaly")
     
     # Use only normal samples from support set for prototype calculation
-    normal_support_set = [inst for inst in target_support_set[:max_batch_size*2] if 
+    normal_support_set = [inst for inst in target_support_set[:batch_size*2] if 
                         hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
     
     # If no normal samples, use all samples but log a warning
     if not normal_support_set:
         if logger:
             logger.warning("No normal samples found in support set for prototype calculation")
-        normal_support_set = target_support_set[:max_batch_size*2]
+        normal_support_set = target_support_set[:batch_size*2]
     
     # Prepare support data - use more instances for better prototype
     support_tinst, support_labels = prepare_batch_for_training(normal_support_set, vocab, verbose=False)
@@ -235,7 +230,7 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
     
     # Ensure we have a balance of normal and anomalous samples in the query batch
     # This helps prevent the case where we only have one class in the query set
-    if len(target_query_set) > max_batch_size:
+    if len(target_query_set) > batch_size:
         normal_query_instances = [inst for inst in target_query_set if hasattr(inst, 'label') and 
                                (inst.label == 0 or inst.label == "Normal")]
         anomaly_query_instances = [inst for inst in target_query_set if hasattr(inst, 'label') and 
@@ -244,15 +239,15 @@ def meta_test_step(target_support_set, target_query_set, encoder, optimizer, dev
         # Ensure we have at least some instances of each class if available
         if normal_query_instances and anomaly_query_instances:
             # Take a balanced sample
-            max_per_class = max_batch_size // 2
+            max_per_class = batch_size // 2
             normal_sample = normal_query_instances[:max_per_class]
             anomaly_sample = anomaly_query_instances[:max_per_class]
             query_batch = normal_sample + anomaly_sample
         else:
             # If we don't have both classes, just take a sample
-            query_batch = target_query_set[:max_batch_size]
+            query_batch = target_query_set[:batch_size]
     else:
-        query_batch = target_query_set[:max_batch_size]
+        query_batch = target_query_set[:batch_size]
     
     # Prepare query data
     query_tinst, query_labels = prepare_batch_for_training(query_batch, vocab, verbose=False)
@@ -568,9 +563,8 @@ def evaluate_model(
     # Process in chunks to reduce memory usage
     all_predictions = []
     all_true_labels = []
-    
-    chunk_size = min(batch_size, 32)  # Smaller batch size to prevent OOM
-    num_chunks = (len(test_data) + chunk_size - 1) // chunk_size
+     # Smaller batch size to prevent OOM
+    num_chunks = (len(test_data) + batch_size - 1) // batch_size
     
     logger.info(f"Evaluating on {len(test_data)} instances in {num_chunks} chunks")
     
@@ -579,8 +573,8 @@ def evaluate_model(
     for chunk_idx in range(num_chunks):
         try:
             # Get chunk of data
-            start_idx = chunk_idx * chunk_size
-            end_idx = min((chunk_idx + 1) * chunk_size, len(test_data))
+            start_idx = chunk_idx * batch_size
+            end_idx = min((chunk_idx + 1) * batch_size, len(test_data))
             chunk_data = test_data[start_idx:end_idx]
             
             # Skip empty chunks
@@ -599,7 +593,7 @@ def evaluate_model(
                 # If we have both normal and anomaly instances, create a balanced chunk
                 if normal_instances and anomaly_instances:
                     logger.debug(f"Balancing chunk: {len(normal_instances)} normal, {len(anomaly_instances)} anomaly")
-                    max_per_class = chunk_size // 2
+                    max_per_class = batch_size // 2
                     balanced_normal = normal_instances[:max_per_class]
                     balanced_anomaly = anomaly_instances[:max_per_class]
                     chunk_data = balanced_normal + balanced_anomaly

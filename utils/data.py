@@ -109,14 +109,12 @@ def encode_log_sequences_with_gru(model, vocab, instances, batch_size=128, show_
     logger.info(f"Starting encoding of {len(instances)} instances with batch size {batch_size}")
 
     with torch.no_grad():
-        # Create smaller batches for more robustness
-        smaller_batch_size = min(batch_size, 64)
-        logger.info(f"Using batch size: {smaller_batch_size} for more stable processing")
+        logger.info(f"Using batch size: {batch_size} for more stable processing")
         
-        iterator = data_iter(instances, batch_size=smaller_batch_size, shuffle=False)
+        iterator = data_iter(instances, batch_size=batch_size, shuffle=False)
         
         # Skip iterator creation if no instances (defensive)
-        total = max(1, len(instances)//smaller_batch_size) if instances else 0
+        total = max(1, len(instances)//batch_size) if instances else 0
         if show_progress and total > 0:
             iterator = tqdm(iterator, desc="Encoding sequences", total=total)
 

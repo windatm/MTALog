@@ -5,18 +5,37 @@
 Training and evaluation functions for MTALog
 """
 
-import os
-import time
 import torch
 import numpy as np
-from tqdm import tqdm
+import random
+from collections import defaultdict
+import traceback
 
 from utils.data_processing import (
-    encode_sequences, 
-    prepare_batch_for_training,
-    calculate_metrics,
-    create_embedding_lookup
+    prepare_batch_for_training
 )
+
+
+def create_batches(data, batch_size):
+    """
+    Split a dataset into batches of specified size.
+    
+    Args:
+        data: List of data instances
+        batch_size: Size of each batch
+        
+    Returns:
+        list: List of batches, where each batch is a list of instances
+    """
+    batches = []
+    num_batches = (len(data) + batch_size - 1) // batch_size
+    
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, len(data))
+        batches.append(data[start_idx:end_idx])
+    
+    return batches
 
 
 def ensure_vocab_has_template_to_idx(vocab):
@@ -27,20 +46,148 @@ def ensure_vocab_has_template_to_idx(vocab):
     return vocab
 
 
-def meta_train_step(source_support_set, source_query_set, encoder, optimizer, device, batch_size=32):
+def cluster_loss(embeddings, centroid=None):
     """
-    Perform one meta-training step on source data using prototype-based approach
+    Loss để kéo các embedding normal logs lại gần nhau trong một cluster chặt chẽ
     
     Args:
-        source_support_set: Support set from source domain
-        source_query_set: Query set from source domain
+        embeddings: Tensor embeddings từ logs bình thường
+        centroid: Tâm điểm của cluster (nếu đã có), nếu không sẽ tính trung bình
+        
+    Returns:
+        loss: Giá trị loss
+        centroid: Tâm điểm của cluster
+    """
+    if centroid is None:
+        # Tính centroid nếu chưa có
+        centroid = torch.mean(embeddings, dim=0, keepdim=True)
+    
+    # Tính khoảng cách đến centroid
+    distances = torch.norm(embeddings - centroid, dim=1)
+    
+    # Loss là trung bình khoảng cách
+    loss = torch.mean(distances)
+    
+    return loss, centroid
+
+
+def contrastive_loss(embeddings, labels, centroid, margin=1.0):
+    """
+    Contrastive loss để kéo normal về gần cluster và đẩy anomaly ra xa
+    
+    Args:
+        embeddings: Tensor embeddings từ logs
+        labels: Nhãn của logs (0: normal, 1: anomaly)
+        centroid: Tâm điểm của normal cluster
+        margin: Khoảng cách tối thiểu để đẩy anomaly ra
+        
+    Returns:
+        loss: Tổng hợp loss
+    """
+    # Tính khoảng cách đến centroid
+    distances = torch.norm(embeddings - centroid, dim=1)
+    
+    # Binary labels: 0 (normal), 1 (anomaly)
+    normal_mask = (labels == 0)
+    anomaly_mask = (labels == 1)
+    
+    # Loss for normal: kéo về gần centroid
+    normal_loss = torch.mean(distances[normal_mask]) if torch.any(normal_mask) else torch.tensor(0.0, device=embeddings.device)
+    
+    # Loss for anomaly: đẩy xa khỏi centroid ít nhất margin
+    anomaly_distances = distances[anomaly_mask]
+    anomaly_loss = torch.mean(torch.clamp(margin - anomaly_distances, min=0)) if torch.any(anomaly_mask) else torch.tensor(0.0, device=embeddings.device)
+    
+    # Tổng hợp loss
+    total_loss = normal_loss + anomaly_loss
+    
+    return total_loss
+
+
+def transfer_loss(target_embeddings, source_centroid, alpha=0.3):
+    """
+    Loss để điều chỉnh cluster từ source qua target
+    
+    Args:
+        target_embeddings: Embeddings từ target normal logs
+        source_centroid: Centroid đã học từ source
+        alpha: Trọng số cho quá trình transfer
+        
+    Returns:
+        loss: Tổng hợp loss
+        target_centroid: Centroid mới cho target
+    """
+    # Tính centroid của target
+    target_centroid = torch.mean(target_embeddings, dim=0, keepdim=True)
+    
+    # Tính loss để kéo target embeddings lại gần nhau
+    cluster_l, _ = cluster_loss(target_embeddings, target_centroid)
+    
+    # Tính loss để giữ target centroid gần source centroid
+    transfer_l = torch.norm(target_centroid - source_centroid)
+    
+    # Kết hợp với trọng số alpha
+    total_loss = cluster_l + alpha * transfer_l
+    
+    return total_loss, target_centroid
+
+
+def classify_logs(query_embeddings, centroid, support_embeddings, z_score=2.0):
+    """
+    Phân loại logs dựa trên khoảng cách đến centroid của normal cluster
+    
+    Args:
+        query_embeddings: Embeddings cần phân loại
+        centroid: Tâm điểm của normal cluster
+        support_embeddings: Embeddings từ support set (normal logs)
+        z_score: Số lần độ lệch chuẩn để xác định ngưỡng
+        
+    Returns:
+        predictions: Dự đoán nhãn (0: normal, 1: anomaly)
+        confidence: Độ tin cậy của dự đoán (khoảng cách đã chuẩn hóa)
+        threshold: Ngưỡng phân loại đã được sử dụng
+    """
+    # Tính khoảng cách từ query embeddings đến centroid
+    query_distances = torch.norm(query_embeddings - centroid, dim=1)
+    
+    # Tính khoảng cách từ support embeddings đến centroid
+    support_distances = torch.norm(support_embeddings - centroid, dim=1)
+    
+    # Tính ngưỡng dựa trên phân phối khoảng cách của support set
+    mean_distance = torch.mean(support_distances)
+    std_distance = torch.std(support_distances)
+    
+    # Ngưỡng = mean + z_score * std 
+    threshold = mean_distance + z_score * std_distance
+    
+    # Phân loại: 0 (normal) nếu khoảng cách <= threshold, 1 (anomaly) nếu không
+    predictions = (query_distances > threshold).int()
+    
+    # Confidence scores: khoảng cách được chuẩn hóa
+    confidence = query_distances / threshold
+    
+    return predictions, confidence, threshold
+
+
+def meta_train_step(source_support_set, source_query_set, encoder, optimizer, device, batch_size=32, margin=1.0, logger=None):
+    """
+    Perform one meta-training step on source data using the two-stage approach:
+    1. Build a normal cluster using support set
+    2. Use query set to refine the boundary between normal and anomaly
+    
+    Args:
+        source_support_set: Support set from source domain (normal instances)
+        source_query_set: Query set from source domain (normal and anomaly instances)
         encoder: Neural network encoder model
         optimizer: Optimizer for parameter updates
         device: Device to run computations on
         batch_size: Batch size for training
+        margin: Margin for contrastive loss
+        logger: Optional logger for debug information
         
     Returns:
         loss: Training loss value
+        centroid: The computed normal centroid
     """
     # Set model to training mode
     encoder.train()
@@ -55,16 +202,41 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
             raise AttributeError("No vocab found in encoder or support set. Cannot proceed with training.")
     
     # Ensure vocab has template_to_idx method - silently add if needed
-    if not hasattr(vocab, 'template_to_idx'):
-        vocab.template_to_idx = lambda template: vocab.word2id(str(template))
+    vocab = ensure_vocab_has_template_to_idx(vocab)
     
+    # Log distribution of labels in support and query sets
+    if logger:
+        normal_support = sum(1 for inst in source_support_set if hasattr(inst, 'label') and 
+                        (inst.label == 0 or inst.label == "Normal"))
+        anomaly_support = sum(1 for inst in source_support_set if hasattr(inst, 'label') and 
+                         (inst.label == 1 or inst.label == "Anomalous"))
+        
+        normal_query = sum(1 for inst in source_query_set if hasattr(inst, 'label') and 
+                      (inst.label == 0 or inst.label == "Normal"))
+        anomaly_query = sum(1 for inst in source_query_set if hasattr(inst, 'label') and 
+                       (inst.label == 1 or inst.label == "Anomalous"))
+        
+        logger.debug(f"Support set: {len(source_support_set)} instances, {normal_support} normal, {anomaly_support} anomaly")
+        logger.debug(f"Query set: {len(source_query_set)} instances, {normal_query} normal, {anomaly_query} anomaly")
     
-    # Divide data into support and query
-    support_data = source_support_set[:batch_size]
-    query_data = source_query_set[:batch_size]
+    # Filter the support set to ensure we're using only normal instances
+    normal_support_set = [inst for inst in source_support_set if 
+                         hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
+    
+    # If no normal samples in support, warn and use all samples
+    if not normal_support_set:
+        if logger:
+            logger.warning("No normal samples found in support set. Using all instances.")
+        normal_support_set = source_support_set
+    
+    # Limit batch size to prevent memory issues
+    normal_support_batch = normal_support_set[:batch_size]
+    
+    # STAGE 1: Build a normal cluster using support set
+    # ---------------------------------------------
     
     # Prepare support data
-    support_tinst, support_labels = prepare_batch_for_training(support_data, vocab, verbose=False)
+    support_tinst, support_labels = prepare_batch_for_training(normal_support_batch, vocab, verbose=False)
     
     # Create model inputs
     support_words = support_tinst.to(device)
@@ -72,665 +244,393 @@ def meta_train_step(source_support_set, source_query_set, encoder, optimizer, de
     support_word_len = torch.sum(support_masks, dim=1).to(device)
     support_model_inputs = (support_words, support_masks, support_word_len)
     
-    # Forward pass on support set - calculate prototype representation
+    # Forward pass on support set
+    optimizer.zero_grad()
     with torch.set_grad_enabled(True):
         # Get embeddings
-        support_logits, _, support_embeddings = encoder(support_model_inputs)
+        _, _, support_embeddings = encoder(support_model_inputs)
         
-        # Create prototype as mean of embeddings
-        prototype = support_embeddings.mean(dim=0, keepdim=True)
+        # Apply cluster loss to build tight normal cluster
+        stage1_loss, normal_centroid = cluster_loss(support_embeddings)
+        
+        # Backward pass
+        stage1_loss.backward()
         
         # Free memory
         del support_model_inputs, support_words, support_masks, support_word_len
         torch.cuda.empty_cache()
     
-    # Calculate loss based on prototype and support logits
-    support_loss = torch.nn.CrossEntropyLoss()(support_logits, support_labels.to(device))
+    # STAGE 2: Use query set to refine classification boundary
+    # -------------------------------------------------------
     
-    # Update model parameters
-    optimizer.zero_grad()
-    support_loss.backward()
-    optimizer.step()
-    
-    # Clear memory
-    del support_logits, support_embeddings
-    torch.cuda.empty_cache()
-    
-    # Prepare query data
-    query_tinst, query_labels = prepare_batch_for_training(query_data, vocab, verbose=False)
-    
-    # Create model inputs for query
-    query_words = query_tinst.to(device)
-    query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
-    query_word_len = torch.sum(query_masks, dim=1).to(device)
-    query_model_inputs = (query_words, query_masks, query_word_len)
-    
-    # Forward pass on query set with no gradient
-    with torch.no_grad():
-        # Get embeddings
-        query_logits, _, query_embeddings = encoder(query_model_inputs)
-        
-        # Calculate loss
-        query_loss = torch.nn.CrossEntropyLoss()(query_logits, query_labels.to(device))
-        
-        # Free memory
-        del query_model_inputs, query_words, query_masks, query_word_len, query_embeddings, query_logits, prototype
-        torch.cuda.empty_cache()
-    
-    return query_loss.item()
-
-
-def meta_test_step(target_support_set, target_query_set, encoder, optimizer, device, batch_size=32, logger=None):
-    """
-    Perform one meta-testing step on target data using prototype-based approach
-    
-    Args:
-        target_support_set: Support set from target domain
-        target_query_set: Query set from target domain
-        encoder: Neural network encoder model
-        optimizer: Optimizer for parameter updates
-        device: Device to run computations on
-        batch_size: Batch size for training
-        logger: Optional logger for debug information
-        
-    Returns:
-        loss: Test loss value
-        metrics: Performance metrics dictionary
-    """
-    # Set model to evaluation mode
-    encoder.eval()
-    
-    # Basic validation of input data
-    if not target_support_set or len(target_support_set) == 0:
-        if logger:
-            logger.warning("Empty target support set provided to meta_test_step")
-        return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
-    
-    if not target_query_set or len(target_query_set) == 0:
-        if logger:
-            logger.warning("Empty target query set provided to meta_test_step")
-        return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
-    
-    # Get vocab with fallback
-    if hasattr(encoder, 'vocab'):
-        vocab = encoder.vocab
-    else:
-        # Try to extract vocab from first instance in support set
-        vocab = getattr(target_support_set[0], 'vocab', None)
-        if vocab is None:
-            error_msg = "No vocab found in encoder or support set. Cannot proceed with testing."
-            if logger:
-                logger.error(error_msg)
-            raise AttributeError(error_msg)
-    
-    # Ensure vocab has template_to_idx method - silently add if needed
-    if not hasattr(vocab, 'template_to_idx'):
-        vocab.template_to_idx = lambda template: vocab.word2id(str(template))# Reduced batch size
-    
-    # Log distribution of labels in support set
-    if logger:
-        normal_count = sum(1 for inst in target_support_set if hasattr(inst, 'label') and 
-                        (inst.label == 0 or inst.label == "Normal"))
-        anomaly_count = sum(1 for inst in target_support_set if hasattr(inst, 'label') and 
-                         (inst.label == 1 or inst.label == "Anomalous"))
-        logger.debug(f"Support set: {len(target_support_set)} instances, {normal_count} normal, {anomaly_count} anomaly")
-    
-    # Use only normal samples from support set for prototype calculation
-    normal_support_set = [inst for inst in target_support_set[:batch_size*2] if 
-                        hasattr(inst, 'label') and (inst.label == 0 or inst.label == "Normal")]
-    
-    # If no normal samples, use all samples but log a warning
-    if not normal_support_set:
-        if logger:
-            logger.warning("No normal samples found in support set for prototype calculation")
-        normal_support_set = target_support_set[:batch_size*2]
-    
-    # Prepare support data - use more instances for better prototype
-    support_tinst, support_labels = prepare_batch_for_training(normal_support_set, vocab, verbose=False)
-    
-    # Create model inputs
-    support_words = support_tinst.to(device)
-    support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
-    support_word_len = torch.sum(support_masks, dim=1).to(device)
-    support_model_inputs = (support_words, support_masks, support_word_len)
-    
-    # Forward pass on support set to calculate prototype
-    with torch.no_grad():
-        # Get embeddings - capture and log any errors
-        try:
-            _, _, support_embeddings = encoder(support_model_inputs)
-            
-            # Check if embeddings contain NaN values
-            if torch.isnan(support_embeddings).any():
-                if logger:
-                    logger.warning("NaN values detected in support embeddings")
-                # Replace NaN with zeros
-                support_embeddings = torch.nan_to_num(support_embeddings, nan=0.0)
-            
-            # Create prototype as mean of embeddings
-            prototype = support_embeddings.mean(dim=0, keepdim=True)
-            
-        except Exception as e:
-            error_msg = f"Error in prototype calculation: {str(e)}"
-            if logger:
-                logger.error(error_msg)
-            return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
-        
-        # Free memory
-        del support_model_inputs, support_words, support_masks, support_word_len, support_embeddings
-        torch.cuda.empty_cache()
-    
-    # Log distribution of labels in query set
-    if logger:
-        normal_count = sum(1 for inst in target_query_set if hasattr(inst, 'label') and 
-                        (inst.label == 0 or inst.label == "Normal"))
-        anomaly_count = sum(1 for inst in target_query_set if hasattr(inst, 'label') and 
-                         (inst.label == 1 or inst.label == "Anomalous"))
-        logger.debug(f"Query set: {len(target_query_set)} instances, {normal_count} normal, {anomaly_count} anomaly")
-    
-    # Ensure we have a balance of normal and anomalous samples in the query batch
-    # This helps prevent the case where we only have one class in the query set
-    if len(target_query_set) > batch_size:
-        normal_query_instances = [inst for inst in target_query_set if hasattr(inst, 'label') and 
-                               (inst.label == 0 or inst.label == "Normal")]
-        anomaly_query_instances = [inst for inst in target_query_set if hasattr(inst, 'label') and 
-                                (inst.label == 1 or inst.label == "Anomalous")]
-        
-        # Ensure we have at least some instances of each class if available
-        if normal_query_instances and anomaly_query_instances:
-            # Take a balanced sample
-            max_per_class = batch_size // 2
-            normal_sample = normal_query_instances[:max_per_class]
-            anomaly_sample = anomaly_query_instances[:max_per_class]
-            query_batch = normal_sample + anomaly_sample
-        else:
-            # If we don't have both classes, just take a sample
-            query_batch = target_query_set[:batch_size]
-    else:
-        query_batch = target_query_set[:batch_size]
+    # Sample from query set (include both normal and anomaly)
+    query_batch = source_query_set[:batch_size]
     
     # Prepare query data
     query_tinst, query_labels = prepare_batch_for_training(query_batch, vocab, verbose=False)
     
-    # Ensure we have valid labels
-    if torch.unique(query_labels).shape[0] <= 1:
-        if logger:
-            logger.warning(f"Only one class ({query_labels[0].item() if query_labels.shape[0] > 0 else 'unknown'}) found in query batch")
-    
     # Create model inputs for query
     query_words = query_tinst.to(device)
     query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
     query_word_len = torch.sum(query_masks, dim=1).to(device)
     query_model_inputs = (query_words, query_masks, query_word_len)
     
-    # Forward pass on query set with no gradient
-    with torch.no_grad():
-        try:
-            # Get embeddings and logits
-            query_logits, _, query_embeddings = encoder(query_model_inputs)
-            
-            # Check for NaN values
-            if torch.isnan(query_logits).any() or torch.isnan(query_embeddings).any():
-                if logger:
-                    logger.warning("NaN values detected in query outputs")
-                # Replace NaN with zeros
-                query_logits = torch.nan_to_num(query_logits, nan=0.0)
-                query_embeddings = torch.nan_to_num(query_embeddings, nan=0.0)
-            
-            # Calculate cosine similarity to prototype
-            similarity = torch.nn.functional.cosine_similarity(query_embeddings, prototype, dim=1)
-            
-            # Calculate loss - handle case where all labels are the same
-            try:
-                query_loss = torch.nn.CrossEntropyLoss()(query_logits, query_labels.to(device))
-            except Exception as e:
-                if logger:
-                    logger.warning(f"Error calculating loss: {str(e)}")
-                query_loss = torch.tensor(0.0, device=device)
-            
-            # Make predictions using logits
-            y_pred_from_logits = torch.argmax(query_logits, dim=1).cpu().numpy()
-            
-            # Also try making predictions using similarity threshold
-            # Lower similarity to prototype (normal instances) means higher anomaly probability
-            similarity_threshold = similarity.median().item()  # Adaptive threshold
-            y_pred_from_similarity = (similarity < similarity_threshold).cpu().numpy().astype(int)
-            
-            # Combine predictions - if both methods agree, use that; otherwise, use logits
-            y_pred = np.where(
-                y_pred_from_logits == y_pred_from_similarity,
-                y_pred_from_logits,
-                y_pred_from_logits
-            )
-            
-            y_true = query_labels.cpu().numpy()
-            
-            # Log prediction distribution
-            if logger:
-                logger.debug(f"Prediction distribution: {np.bincount(y_pred)}")
-                logger.debug(f"True label distribution: {np.bincount(y_true)}")
-            
-        except Exception as e:
-            error_msg = f"Error in query processing: {str(e)}"
-            if logger:
-                logger.error(error_msg)
-            import traceback
-            if logger:
-                logger.error(traceback.format_exc())
-            return 0.0, {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
-        finally:
-            # Free memory
-            if 'query_model_inputs' in locals():
-                del query_model_inputs
-            if 'query_words' in locals():
-                del query_words, query_masks, query_word_len
-            if 'query_embeddings' in locals():
-                del query_embeddings
-            if 'query_logits' in locals():
-                del query_logits
-            if 'prototype' in locals():
-                del prototype
-            if 'similarity' in locals():
-                del similarity
-            torch.cuda.empty_cache()
+    # Forward pass on query set
+    with torch.set_grad_enabled(True):
+        # Get embeddings
+        query_logits, _, query_embeddings = encoder(query_model_inputs)
+        
+        # Apply contrastive loss to refine boundaries
+        stage2_loss = contrastive_loss(query_embeddings, query_labels.to(device), 
+                                      normal_centroid, margin=margin)
+        
+        # Backward pass
+        stage2_loss.backward()
+        
+        # Update model parameters
+        optimizer.step()
+        
+        # Calculate total loss
+        total_loss = stage1_loss.item() + stage2_loss.item()
+        
+        # Free memory
+        del query_model_inputs, query_words, query_masks, query_word_len, query_embeddings, query_logits
+        torch.cuda.empty_cache()
     
-    # Calculate metrics
-    metrics = calculate_metrics(y_true, y_pred)
+    # Detach centroid for return
+    centroid_cpu = normal_centroid.detach().cpu()
     
-    # Log detailed metrics
-    if logger:
-        logger.debug(f"Metrics: TP={metrics['tp']}, FP={metrics['fp']}, FN={metrics['fn']}, TN={metrics['tn']}")
-    
-    return query_loss.item(), metrics
+    return total_loss, centroid_cpu
 
 
-def train_model(
-    source_systems, 
-    source_support_sets, 
-    source_query_sets,
-    target_support_set,
-    target_query_set,
-    source_encoders,
-    target_encoder,
-    optimizer,
-    device,
-    num_epochs,
-    batch_size,
-    output_model_dir,
-    logger
-):
+def meta_test_step(support_batch, query_batch, encoder, optimizer=None, device='cpu', batch_size=32, margin=0.5, logger=None):
     """
-    Train the model using meta-learning approach
+    Perform a meta-testing step using the trained model
     
     Args:
-        source_systems: List of source system names
-        source_support_sets: Dictionary of support sets for each source system
-        source_query_sets: Dictionary of query sets for each source system
-        target_support_set: Support set for target system
-        target_query_set: Query set for target system
-        source_encoders: Dictionary of encoders for each source system
-        target_encoder: Encoder for target system
+        support_batch: Support set batch (normal samples)
+        query_batch: Query set batch (mix of normal and abnormal samples)
+        encoder: Neural network encoder model
+        optimizer: Optimizer for parameter updates (can be None for evaluation)
+        device: Device to run computations on
+        batch_size: Batch size for training
+        margin: Margin for contrastive loss
+        logger: Logger for tracking process
+    
+    Returns:
+        loss: Loss value for this step
+        metrics: Dictionary containing evaluation metrics
+    """
+    encoder.eval()  # Set model to evaluation mode
+    
+    metrics = {}
+    if not query_batch:
+        if logger:
+            logger.warning("Empty query batch in meta_test_step")
+        return 0.0, {"accuracy": 0, "precision": 0, "recall": 0, "f1": 0, 
+                     "tp": 0, "fp": 0, "fn": 0, "tn": 0}
+    
+    # Log label distribution if logger is provided
+    if logger:
+        normal_count = sum(1 for inst in query_batch if inst.label == 0)
+        anomaly_count = sum(1 for inst in query_batch if inst.label == 1)
+        logger.debug(f"Query batch: {normal_count} normal, {anomaly_count} anomalous")
+        
+        if support_batch:
+            support_normal = sum(1 for inst in support_batch if inst.label == 0)
+            support_anomaly = sum(1 for inst in support_batch if inst.label == 1)
+            logger.debug(f"Support batch: {support_normal} normal, {support_anomaly} anomalous")
+    
+    # Process query batch
+    query_tinst, query_labels = prepare_batch_for_training(query_batch, encoder.vocab, verbose=False)
+    query_words = query_tinst.to(device)
+    query_masks = torch.ones_like(query_words, dtype=torch.float, device=device)
+    query_word_len = torch.sum(query_masks, dim=1).to(device)
+    query_model_inputs = (query_words, query_masks, query_word_len)
+    
+    if query_model_inputs is None:
+        if logger:
+            logger.warning("Invalid query batch tensor instances in meta_test_step")
+        return 0.0, {"accuracy": 0, "precision": 0, "recall": 0, "f1": 0, 
+                     "tp": 0, "fp": 0, "fn": 0, "tn": 0}
+    
+    query_logits, _, query_embeddings = encoder(query_model_inputs)
+    
+    # Get normal centroid - either use stored one or compute from support set
+    if hasattr(encoder, 'normal_centroid') and encoder.normal_centroid is not None:
+        normal_centroid = encoder.normal_centroid
+        if logger:
+            logger.debug("Using pre-computed normal centroid from encoder")
+    elif support_batch:
+        # Filter support set to only include normal instances
+        normal_support = [inst for inst in support_batch if inst.label == 0]
+        
+        if not normal_support:
+            if logger:
+                logger.warning("No normal instances in support batch for centroid calculation")
+            # Use mean of query embeddings as fallback (not ideal but prevents errors)
+            normal_centroid = torch.mean(query_embeddings, dim=0, keepdim=True)
+        else:
+            # Compute normal centroid from support set
+            support_tinst, _ = prepare_batch_for_training(normal_support, encoder.vocab, verbose=False)
+            support_words = support_tinst.to(device)
+            support_masks = torch.ones_like(support_words, dtype=torch.float, device=device)
+            support_word_len = torch.sum(support_masks, dim=1).to(device)
+            support_model_inputs = (support_words, support_masks, support_word_len)
+            
+            if support_model_inputs is None:
+                if logger:
+                    logger.warning("Invalid support batch tensor instances in meta_test_step")
+                # Use mean of query embeddings as fallback
+                normal_centroid = torch.mean(query_embeddings, dim=0, keepdim=True)
+            else:
+                with torch.no_grad():
+                    _, _, support_embeddings = encoder(support_model_inputs)
+                normal_centroid = torch.mean(support_embeddings, dim=0, keepdim=True)
+    else:
+        # If no support batch and no stored centroid, use mean of query embeddings as fallback
+        if logger:
+            logger.warning("No support batch or stored centroid, using query mean as centroid")
+        normal_centroid = torch.mean(query_embeddings, dim=0, keepdim=True)
+    
+    # Calculate distances to normal centroid
+    with torch.no_grad():
+        # Calculate distances from each query embedding to the normal centroid
+        distances = torch.norm(query_embeddings - normal_centroid, dim=1)
+        
+        # Predict anomalies (1) for instances with distance > threshold, normal (0) otherwise
+        threshold = torch.mean(distances) + margin * torch.std(distances)
+        predicted_labels = (distances > threshold).long()
+        
+        # Get true labels from query batch
+        true_labels = torch.tensor([inst.label for inst in query_batch], device=device)
+        
+        # Calculate metrics
+        tp = torch.sum((predicted_labels == 1) & (true_labels == 1)).item()
+        fp = torch.sum((predicted_labels == 1) & (true_labels == 0)).item()
+        fn = torch.sum((predicted_labels == 0) & (true_labels == 1)).item()
+        tn = torch.sum((predicted_labels == 0) & (true_labels == 0)).item()
+        
+        # Avoid division by zero
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-10)
+        accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+        
+        metrics = {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "tn": tn
+        }
+    
+    # Calculate loss if we need to perform optimization
+    if optimizer is not None:
+        encoder.train()
+        optimizer.zero_grad()
+        
+        # Recompute embeddings in train mode
+        query_logits, _, query_embeddings = encoder(query_model_inputs)
+        
+        # Simple mean squared error loss for distances
+        mse_loss = torch.nn.MSELoss()
+        
+        # Expected distances: small for normal, large for anomalies
+        expected_distances = torch.zeros_like(distances)
+        for i, inst in enumerate(query_batch):
+            if inst.label == 0:  # Normal
+                expected_distances[i] = 0.0  # Should be close to centroid
+            else:  # Anomaly
+                expected_distances[i] = margin  # Should be at least 'margin' away
+        
+        # Calculate distances again
+        distances = torch.norm(query_embeddings - normal_centroid, dim=1)
+        
+        # Calculate loss
+        loss = mse_loss(distances, expected_distances)
+        
+        # Backpropagate and optimize
+        loss.backward()
+        optimizer.step()
+        
+        return loss.item(), metrics
+    
+    # If no optimization, return 0 loss
+    return 0.0, metrics
+
+
+def train_model(source_support_set, source_query_set, encoder, optimizer, device, epochs=10, batch_size=32, logger=None, save_path=None):
+    """
+    Train a model using meta-learning approach
+    
+    Args:
+        source_support_set: Support set from source domain
+        source_query_set: Query set from source domain
+        encoder: Neural network encoder model
         optimizer: Optimizer for parameter updates
         device: Device to run computations on
-        num_epochs: Number of training epochs
+        epochs: Number of epochs to train
         batch_size: Batch size for training
-        output_model_dir: Directory to save model
-        logger: Logger instance
-        
+        logger: Logger for tracking training process
+        save_path: Path to save the model
+    
     Returns:
-        best_model: Best model based on validation performance
-        best_f1: Best F1 score achieved during training
+        trained_encoder: Trained encoder model
     """
-    # Training statistics
-    start_time = time.time()
-    best_f1 = 0
-    best_model = None
+    # Ensure model is on the correct device
+    encoder = encoder.to(device)
     
-    # Defensive check for vocab in encoders
-    # For target encoder
-    if not hasattr(target_encoder, 'vocab') and hasattr(source_encoders[source_systems[0]], 'vocab'):
-        logger.warning("Target encoder missing vocab attribute. Using vocab from first source encoder.")
-        target_encoder.vocab = source_encoders[source_systems[0]].vocab
+    best_loss = float('inf')
+    final_centroid = None
     
-    # For source encoders
-    for source_system in source_systems:
-        if not hasattr(source_encoders[source_system], 'vocab'):
-            logger.warning(f"Source encoder for {source_system} missing vocab attribute. Using target encoder's vocab.")
-            # Try to get vocab from target encoder
-            if hasattr(target_encoder, 'vocab'):
-                source_encoders[source_system].vocab = target_encoder.vocab
-            else:
-                logger.error(f"No vocab available for {source_system} encoder. Training may fail.")
-    
-    # Training loop
-    for epoch in range(num_epochs):
-        logger.info(f"=== Epoch {epoch+1}/{num_epochs} ===")
-        epoch_start_time = time.time()
+    for epoch in range(epochs):
+        # Shuffle data for this epoch
+        random.shuffle(source_support_set)
+        random.shuffle(source_query_set)
         
-        # Meta-training on source systems
-        for source_system in source_systems:
-            logger.info(f"Meta-training on {source_system}")
-            support_set = source_support_sets[source_system]
-            query_set = source_query_sets[source_system]
-            encoder = source_encoders[source_system]
-            
-            # Train on batches
-            total_loss = 0
-            num_batches = len(support_set) // batch_size
-            
-            for i in range(num_batches):
-                # Get batch
-                start_idx = i * batch_size
-                end_idx = (i + 1) * batch_size
-                
-                support_batch = support_set[start_idx:end_idx]
-                query_batch = query_set[start_idx:end_idx]
-                
-                # Perform meta-training step
-                loss = meta_train_step(
-                    support_batch, 
-                    query_batch, 
-                    encoder, 
-                    optimizer, 
-                    device, 
-                    batch_size
-                )
-                total_loss += loss
-            
-            avg_loss = total_loss / num_batches
-            logger.info(f"  {source_system} Average Loss: {avg_loss:.4f}")
+        # Create batches for training
+        support_batches = create_batches(source_support_set, batch_size)
+        query_batches = create_batches(source_query_set, batch_size)
         
-        # Meta-testing on target system
-        logger.info(f"Meta-testing on target system")
-        try:
-            loss, metrics = meta_test_step(
-                target_support_set,
-                target_query_set,
-                target_encoder,
-                optimizer,
-                device,
-                batch_size,
-                logger
+        # Ensure we have the same number of batches
+        min_batches = min(len(support_batches), len(query_batches))
+        
+        epoch_loss = 0.0
+        batch_count = 0
+        
+        # Iterate through batches
+        for i in range(min_batches):
+            support_batch = support_batches[i]
+            query_batch = query_batches[i]
+            
+            # Perform meta-training step
+            loss, centroid = meta_train_step(
+                support_batch, 
+                query_batch, 
+                encoder, 
+                optimizer, 
+                device, 
+                batch_size
             )
             
-            # Validate metrics to ensure they are numbers
-            for metric_name, metric_value in metrics.items():
-                if metric_name in ['accuracy', 'precision', 'recall', 'f1']:
-                    if not isinstance(metric_value, (int, float)) or np.isnan(metric_value) or np.isinf(metric_value):
-                        logger.warning(f"Invalid {metric_name} value: {metric_value}, setting to 0")
-                        metrics[metric_name] = 0.0
+            epoch_loss += loss
+            batch_count += 1
             
-            # Log performance
-            logger.info(f"  Target Loss: {loss:.4f}")
-            logger.info(f"  Accuracy: {metrics['accuracy']:.4f}")
-            logger.info(f"  Precision: {metrics['precision']:.4f}")
-            logger.info(f"  Recall: {metrics['recall']:.4f}")
-            logger.info(f"  F1 Score: {metrics['f1']:.4f}")
-            logger.debug(f"  TP: {metrics['tp']}, FP: {metrics['fp']}, FN: {metrics['fn']}, TN: {metrics['tn']}")
+            # Store the latest centroid
+            final_centroid = centroid
             
-            # Save best model
-            if metrics['f1'] > best_f1:
-                best_f1 = metrics['f1']
-                best_model = target_encoder.state_dict()
-                
-                # Save model checkpoint
-                model_path = os.path.join(output_model_dir, f"best_model_epoch_{epoch+1}.pt")
-                torch.save(best_model, model_path)
-                logger.info(f"  New best model saved to {model_path}")
-                
-                # Also save a backup copy of the best model in case of future errors
-                backup_path = os.path.join(output_model_dir, "best_model_latest.pt")
-                torch.save(best_model, backup_path)
-        except Exception as e:
-            # Log the error but continue training
-            logger.error(f"Error during meta-testing: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            # Free memory
+            torch.cuda.empty_cache()
         
-        # Log epoch time
-        epoch_time = time.time() - epoch_start_time
-        logger.info(f"  Epoch completed in {epoch_time:.2f} seconds")
+        # Calculate average loss for the epoch
+        avg_loss = epoch_loss / max(batch_count, 1)
+        
+        if logger:
+            logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
+        
+        # Save the best model
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            if save_path:
+                torch.save(encoder.state_dict(), save_path)
+                if logger:
+                    logger.info(f"Saved best model with loss {avg_loss:.4f} to {save_path}")
     
-    # Log total training time
-    total_time = time.time() - start_time
-    logger.info(f"Training completed in {total_time:.2f} seconds")
-    logger.info(f"Best F1 Score: {best_f1:.4f}")
+    # Load best model if path specified
+    if save_path:
+        encoder.load_state_dict(torch.load(save_path))
     
-    return best_model, best_f1
+    if logger:
+        logger.info(f"Training completed. Best loss: {best_loss:.4f}")
+    
+    # Attach the normal centroid to the encoder for later use
+    if final_centroid is not None:
+        encoder.normal_centroid = final_centroid
+    
+    return encoder
 
 
-def evaluate_model(
-    test_data,
-    encoder,
-    optimizer,
-    device,
-    batch_size,
-    logger
-):
+def evaluate_model(target_support_set, target_query_set, encoder, device, batch_size=32, logger=None, threshold=None):
     """
-    Evaluate the trained model on test data using a memory-efficient approach
+    Evaluate a trained model on the target domain data
     
     Args:
-        test_data: Test dataset
-        encoder: Trained encoder model
-        optimizer: Optimizer with loss function
+        target_support_set: Support set from target domain (normal samples)
+        target_query_set: Query set from target domain (mix of normal and anomalous)
+        encoder: Neural network encoder model
         device: Device to run computations on
         batch_size: Batch size for evaluation
-        logger: Logger instance
+        logger: Optional logger for debug information
+        threshold: Optional fixed threshold for anomaly detection
         
     Returns:
-        metrics: Performance metrics dictionary
+        Dictionary with evaluation metrics
     """
-    logger.info("=== Model Evaluation ===")
+    if logger:
+        logger.info(f"Evaluating model on {len(target_query_set)} query instances using {len(target_support_set)} support instances")
     
-    # Input validation
-    if not test_data or len(test_data) == 0:
-        logger.warning("Empty test data provided to evaluate_model")
-        return {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+    # Validation to prevent empty sets
+    if not target_query_set:
+        if logger:
+            logger.warning("Empty query set in evaluate_model. Cannot evaluate.")
+        return {"accuracy": 0, "precision": 0, "recall": 0, "f1": 0, 
+                "tp": 0, "fp": 0, "fn": 0, "tn": 0}
     
     # Set model to evaluation mode
     encoder.eval()
     
-    # Get vocab with fallback
-    if hasattr(encoder, 'vocab'):
-        vocab = encoder.vocab
-    else:
-        # Try to extract vocab from first instance in test data
-        vocab = getattr(test_data[0], 'vocab', None)
-        if vocab is None:
-            logger.error("No vocab found in encoder or test data. Evaluation may fail.")
-            # Try to create a simple vocab as last resort
-            from utils.vocab import Vocab
-            vocab = Vocab()
+    # Process in batches to handle large datasets
+    num_batches = max(1, len(target_query_set) // batch_size)
+    metrics_sum = defaultdict(float)
     
-    # Ensure vocab has template_to_idx method
-    vocab = ensure_vocab_has_template_to_idx(vocab)
-    
-    # Log distribution of labels in test data
-    normal_count = sum(1 for inst in test_data if hasattr(inst, 'label') and 
-                    (inst.label == 0 or inst.label == "Normal"))
-    anomaly_count = sum(1 for inst in test_data if hasattr(inst, 'label') and 
-                     (inst.label == 1 or inst.label == "Anomalous"))
-    logger.info(f"Test data: {len(test_data)} instances, {normal_count} normal, {anomaly_count} anomaly")
-    
-    # Check if we have both classes
-    if normal_count == 0 or anomaly_count == 0:
-        logger.warning(f"Test data has imbalanced classes: {normal_count} normal, {anomaly_count} anomaly")
-        if normal_count == 0 and anomaly_count == 0:
-            logger.error("No valid labels found in test data")
-            return {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
-    
-    # Process in chunks to reduce memory usage
-    all_predictions = []
-    all_true_labels = []
-     # Smaller batch size to prevent OOM
-    num_chunks = (len(test_data) + batch_size - 1) // batch_size
-    
-    logger.info(f"Evaluating on {len(test_data)} instances in {num_chunks} chunks")
-    
-    total_loss = 0.0
-    
-    for chunk_idx in range(num_chunks):
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, len(target_query_set))
+        query_batch = target_query_set[start_idx:end_idx]
+        
+        # Use a subset of support set for efficiency if it's large
+        support_batch = target_support_set[:min(len(target_support_set), batch_size * 2)]
+        
+        if logger:
+            normal_count = sum(1 for inst in query_batch if inst.label == 0)
+            anomaly_count = sum(1 for inst in query_batch if inst.label == 1)
+            logger.debug(f"Batch {i+1}/{num_batches}: Query batch has {normal_count} normal, {anomaly_count} anomalous")
+        
         try:
-            # Get chunk of data
-            start_idx = chunk_idx * batch_size
-            end_idx = min((chunk_idx + 1) * batch_size, len(test_data))
-            chunk_data = test_data[start_idx:end_idx]
+            # Run evaluation step
+            _, batch_metrics = meta_test_step(
+                support_batch=support_batch, 
+                query_batch=query_batch,
+                encoder=encoder,
+                device=device,
+                batch_size=batch_size,
+                logger=logger
+            )
             
-            # Skip empty chunks
-            if not chunk_data:
-                continue
+            # Add batch metrics to running totals
+            for k, v in batch_metrics.items():
+                metrics_sum[k] += v
                 
-            logger.info(f"Processing evaluation chunk {chunk_idx+1}/{num_chunks}, size: {len(chunk_data)}")
-            
-            # Try to balance the chunk if possible
-            if len(chunk_data) > 4:  # Only balance if we have enough data
-                normal_instances = [inst for inst in chunk_data if hasattr(inst, 'label') and 
-                                (inst.label == 0 or inst.label == "Normal")]
-                anomaly_instances = [inst for inst in chunk_data if hasattr(inst, 'label') and 
-                                 (inst.label == 1 or inst.label == "Anomalous")]
-                
-                # If we have both normal and anomaly instances, create a balanced chunk
-                if normal_instances and anomaly_instances:
-                    logger.debug(f"Balancing chunk: {len(normal_instances)} normal, {len(anomaly_instances)} anomaly")
-                    max_per_class = batch_size // 2
-                    balanced_normal = normal_instances[:max_per_class]
-                    balanced_anomaly = anomaly_instances[:max_per_class]
-                    chunk_data = balanced_normal + balanced_anomaly
-            
-            # Prepare test data for this chunk
-            test_tinst, test_labels = prepare_batch_for_training(chunk_data, vocab, verbose=False)
-            
-            # Log label distribution in this chunk
-            label_counts = {}
-            for label in test_labels.cpu().numpy():
-                label_counts[int(label)] = label_counts.get(int(label), 0) + 1
-            logger.debug(f"Chunk {chunk_idx+1} labels: {label_counts}")
-            
-            # Create model inputs
-            test_words = test_tinst.to(device)
-            test_masks = torch.ones_like(test_words, dtype=torch.float, device=device)
-            test_word_len = torch.sum(test_masks, dim=1).to(device)
-            test_model_inputs = (test_words, test_masks, test_word_len)
-            
-            # Forward pass with no gradient
-            with torch.no_grad():
-                # Get embeddings and logits
-                test_logits, _, test_embeddings = encoder(test_model_inputs)
-                
-                # Check for NaN values
-                if torch.isnan(test_logits).any() or torch.isnan(test_embeddings).any():
-                    logger.warning("NaN values detected in outputs")
-                    # Replace NaN with zeros
-                    test_logits = torch.nan_to_num(test_logits, nan=0.0)
-                    test_embeddings = torch.nan_to_num(test_embeddings, nan=0.0)
-                
-                # Calculate loss - handle exceptions
-                try:
-                    chunk_loss = torch.nn.CrossEntropyLoss()(test_logits, test_labels.to(device))
-                    total_loss += chunk_loss.item()
-                except Exception as e:
-                    logger.warning(f"Error calculating loss: {str(e)}")
-                    chunk_loss = torch.tensor(0.0)
-                
-                # Make predictions using both logits and similarity approach
-                # Standard logits-based approach
-                chunk_preds_logits = torch.argmax(test_logits, dim=1).cpu().numpy()
-                
-                # Try a similarity-based approach if embeddings are available
-                if test_embeddings is not None and test_embeddings.shape[0] > 0:
-                    # Calculate similarity to prototype - use mean of normal instance embeddings
-                    normal_idx = (test_labels == 0).nonzero(as_tuple=True)[0]
-                    if len(normal_idx) > 0:
-                        # If we have normal instances, use them as prototype
-                        normal_embeddings = test_embeddings[normal_idx]
-                        prototype = normal_embeddings.mean(dim=0, keepdim=True)
-                    else:
-                        # Otherwise use mean of all embeddings as prototype
-                        prototype = test_embeddings.mean(dim=0, keepdim=True)
-                    
-                    # Calculate similarity to prototype
-                    similarity = torch.nn.functional.cosine_similarity(test_embeddings, prototype, dim=1)
-                    
-                    # Lower similarity to normal prototype means higher anomaly probability
-                    threshold = similarity.median().item()  # Adaptive threshold
-                    chunk_preds_sim = (similarity < threshold).cpu().numpy().astype(int)
-                    
-                    # Combine predictions - if both methods agree, use that; otherwise, use logits
-                    chunk_preds = np.where(
-                        chunk_preds_logits == chunk_preds_sim,
-                        chunk_preds_logits,
-                        chunk_preds_logits  # Prefer logits if they disagree
-                    )
-                else:
-                    # If no embeddings, use logits predictions
-                    chunk_preds = chunk_preds_logits
-                
-                chunk_true = test_labels.cpu().numpy()
-                
-                # Add to full results
-                all_predictions.extend(chunk_preds)
-                all_true_labels.extend(chunk_true)
-                
-                # Log prediction distribution for this chunk
-                pred_counts = {}
-                for pred in chunk_preds:
-                    pred_counts[int(pred)] = pred_counts.get(int(pred), 0) + 1
-                logger.debug(f"Chunk {chunk_idx+1} predictions: {pred_counts}")
-                
-            # Free memory
-            del test_words, test_masks, test_word_len, test_model_inputs
-            del test_logits, test_embeddings
-            if 'chunk_loss' in locals():
-                del chunk_loss
-            torch.cuda.empty_cache()
-            
         except Exception as e:
-            logger.error(f"Error processing chunk {chunk_idx+1}: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            continue
+            if logger:
+                logger.error(f"Error in evaluation batch {i+1}/{num_batches}: {str(e)}")
+                logger.error(traceback.format_exc())
     
-    # Check if we have predictions
-    if not all_predictions or not all_true_labels:
-        logger.error("No predictions or true labels collected during evaluation")
-        return {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'tp': 0, 'fp': 0, 'fn': 0, 'tn': 0}
+    # Calculate average metrics
+    metrics_avg = {k: v / num_batches for k, v in metrics_sum.items()}
     
-    # Convert to numpy arrays
-    y_pred = np.array(all_predictions)
-    y_true = np.array(all_true_labels)
-    
-    # Log overall prediction distribution
-    pred_distribution = np.bincount(y_pred) if len(y_pred) > 0 else []
-    true_distribution = np.bincount(y_true) if len(y_true) > 0 else []
-    logger.info(f"Prediction distribution: {pred_distribution}")
-    logger.info(f"True label distribution: {true_distribution}")
-    
-    # Calculate metrics
-    metrics = calculate_metrics(y_true, y_pred)
-    
-    # Validate metrics to ensure they are numbers
-    for metric_name, metric_value in metrics.items():
-        if metric_name in ['accuracy', 'precision', 'recall', 'f1']:
-            if not isinstance(metric_value, (int, float)) or np.isnan(metric_value) or np.isinf(metric_value):
-                logger.warning(f"Invalid {metric_name} value: {metric_value}, setting to 0")
-                metrics[metric_name] = 0.0
-    
-    # Calculate average loss
-    avg_loss = total_loss / num_chunks if num_chunks > 0 else 0
-    
-    # Log results
-    logger.info(f"Test Loss: {avg_loss:.4f}")
-    logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
-    logger.info(f"Precision: {metrics['precision']:.4f}")
-    logger.info(f"Recall: {metrics['recall']:.4f}")
-    logger.info(f"F1 Score: {metrics['f1']:.4f}")
-    logger.info(f"True Positives: {metrics['tp']}")
-    logger.info(f"False Positives: {metrics['fp']}")
-    logger.info(f"False Negatives: {metrics['fn']}")
-    logger.info(f"True Negatives: {metrics['tn']}")
-    
-    return metrics
+    if logger:
+        logger.info(f"Evaluation metrics: "
+                   f"Accuracy={metrics_avg['accuracy']:.4f}, "
+                   f"Precision={metrics_avg['precision']:.4f}, "
+                   f"Recall={metrics_avg['recall']:.4f}, "
+                   f"F1={metrics_avg['f1']:.4f}")
+        
+    return metrics_avg
 
 
 def predict(

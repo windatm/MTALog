@@ -184,7 +184,14 @@ def create_analysis_report(template_analysis, vocab_analysis, overlap_results,
             f.write(f"<tr><td>{system}</td>")
             f.write(f"<td>{results.get('total_templates', 'N/A')}</td>")
             f.write(f"<td>{results.get('unique_templates', 'N/A')}</td>")
-            f.write(f"<td>{results.get('templates_per_log_avg', 'N/A'):.2f}</td>")
+            
+            # Handle case where templates_per_log_avg might be a string or doesn't exist
+            avg_templates = results.get('templates_per_log_avg', 'N/A')
+            if isinstance(avg_templates, (int, float)):
+                f.write(f"<td>{avg_templates:.2f}</td>")
+            else:
+                f.write(f"<td>{avg_templates}</td>")
+            
             f.write(f"<td>{len(results.get('templates_only_in_anomalous', []))}</td></tr>\n")
         
         f.write("</table>\n")

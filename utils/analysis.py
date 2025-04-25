@@ -278,21 +278,56 @@ def export_dataset_stats(source_data, target_data, output_dir):
     template_stats = []
     for system, support_set in source_data.get("source_support_sets", {}).items():
         if support_set:
-            stats = {
-                "system": system,
-                "total_logs": len(support_set.get("logs", [])),
-                "normal_logs": sum(1 for label in support_set.get("labels", []) if label == 0),
-                "anomalous_logs": sum(1 for label in support_set.get("labels", []) if label == 1)
-            }
+            # Handle case where support_set is a list
+            if isinstance(support_set, list):
+                logs = support_set
+                labels = []
+                # Try to find labels in source_data if available
+                if "source_labels" in source_data and system in source_data["source_labels"]:
+                    labels = source_data["source_labels"][system]
+                stats = {
+                    "system": system,
+                    "total_logs": len(logs),
+                    "normal_logs": sum(1 for label in labels if label == 0) if labels else "Unknown",
+                    "anomalous_logs": sum(1 for label in labels if label == 1) if labels else "Unknown"
+                }
+            # Handle case where support_set is a dictionary
+            else:
+                logs = support_set.get("logs", [])
+                labels = support_set.get("labels", [])
+                stats = {
+                    "system": system,
+                    "total_logs": len(logs),
+                    "normal_logs": sum(1 for label in labels if label == 0),
+                    "anomalous_logs": sum(1 for label in labels if label == 1)
+                }
             template_stats.append(stats)
     
     if target_data and "target_support_set" in target_data:
-        target_stats = {
-            "system": target_data.get("target_system", "Target"),
-            "total_logs": len(target_data["target_support_set"].get("logs", [])),
-            "normal_logs": sum(1 for label in target_data["target_support_set"].get("labels", []) if label == 0),
-            "anomalous_logs": sum(1 for label in target_data["target_support_set"].get("labels", []) if label == 1)
-        }
+        target_support_set = target_data["target_support_set"]
+        # Handle case where target_support_set is a list
+        if isinstance(target_support_set, list):
+            logs = target_support_set
+            labels = []
+            # Try to find labels in target_data if available
+            if "target_labels" in target_data:
+                labels = target_data["target_labels"]
+            target_stats = {
+                "system": target_data.get("target_system", "Target"),
+                "total_logs": len(logs),
+                "normal_logs": sum(1 for label in labels if label == 0) if labels else "Unknown",
+                "anomalous_logs": sum(1 for label in labels if label == 1) if labels else "Unknown"
+            }
+        # Handle case where target_support_set is a dictionary
+        else:
+            logs = target_support_set.get("logs", [])
+            labels = target_support_set.get("labels", [])
+            target_stats = {
+                "system": target_data.get("target_system", "Target"),
+                "total_logs": len(logs),
+                "normal_logs": sum(1 for label in labels if label == 0),
+                "anomalous_logs": sum(1 for label in labels if label == 1)
+            }
         template_stats.append(target_stats)
     
     if template_stats:

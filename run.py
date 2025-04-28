@@ -6,30 +6,25 @@ Command-line interface for MTALog system
 """
 
 import os
-import sys
 import argparse
 import torch
 import random
 import json
 import numpy as np
 import pandas as pd
-from collections import Counter
-import matplotlib.pyplot as plt
 
-from main import (
+from utils.main import (
     setup_params,
     setup_logging,
     setup_template_encoder,
     process_source_systems,
-    process_target_system,
-    analyze_datasets
+    process_target_system
 )
-from training import train_model, evaluate_model, predict
-from CONSTANTS import DEVICE, PROJECT_ROOT
-from module.Optimizer import Optimizer
+from utils.training import train_model, evaluate_model
+from CONSTANTS import PROJECT_ROOT
 from utils.analysis import (
     analyze_templates, analyze_vocabulary, analyze_overlap,
-    analyze_representations, create_log_analysis_plots, export_dataset_stats
+    create_log_analysis_plots, export_dataset_stats
 )
 
 def parse_arguments():
@@ -46,11 +41,11 @@ def parse_arguments():
     parser.add_argument('--target_system', type=str, default='BGL',
                        help='Target log system for meta-testing')
     parser.add_argument('--parser', type=str, default='IBM', choices=['IBM', 'Drain', 'Spell'],
-                       help='Log parser to use')
+                        help='Log parser to use')
     
     # Training Parameters
     parser.add_argument('--epochs', type=int, default=5,
-                       help='Number of training epochs')
+                        help='Number of training epochs')
     parser.add_argument('--few_shot_ratio', type=float, default=0.1,
                        help='Ratio of logs used for few-shot learning')
     parser.add_argument('--query_sample', type=float, default=1.0,
@@ -189,7 +184,7 @@ def create_analysis_report(template_analysis, vocab_analysis, overlap_results,
             avg_templates = results.get('templates_per_log_avg', 'N/A')
             if isinstance(avg_templates, (int, float)):
                 f.write(f"<td>{avg_templates:.2f}</td>")
-            else:
+    else:
                 f.write(f"<td>{avg_templates}</td>")
             
             f.write(f"<td>{len(results.get('templates_only_in_anomalous', []))}</td></tr>\n")
@@ -283,9 +278,9 @@ def main():
         # Run analysis mode - stop at preprocessing and analyze data
         source_data, target_data = analysis_mode(params, logger)
     elif args.mode == 'train':
-        # Setup template encoder
-        template_encoder = setup_template_encoder(params)
-        
+    # Setup template encoder
+    template_encoder = setup_template_encoder(params)
+    
         # Process source systems
         source_data = process_source_systems(params, logger, template_encoder)
         
@@ -314,4 +309,4 @@ def main():
         logger.info("Prediction mode not fully implemented yet.")
 
 if __name__ == '__main__':
-    main()
+    main() 

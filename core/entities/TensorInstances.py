@@ -61,9 +61,6 @@ class TInstWithLogits:
     @inputs.setter
     def inputs(self, value: Tuple[Tensor, Tensor, Tensor]) -> None:
         """Set the inputs tuple directly"""
-        if not isinstance(value, tuple) or len(value) < 3:
-            raise ValueError("inputs must be a tuple with at least 3 elements")
-            
         self.src_words, self.src_masks, self.word_len = value[:3]
         self._inputs_cache = value
     

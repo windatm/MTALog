@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
 Instance class for representing log sequences and their attributes
 """
@@ -50,30 +47,3 @@ class Instance:
     def event_count(self) -> Counter:
         """Count of events in the sequence"""
         return Counter(self.sequence)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert instance to dictionary"""
-        return {
-            "id": self.id,
-            "sequence": self.sequence,
-            "label": self.label,
-            "predicted": self.predicted,
-            "confidence": self.confidence,
-            "semantic_emb": self.semantic_emb,
-            "encode": self.encode,
-            "semantic_repr": self.semantic_repr,
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Instance':
-        """Create instance from dictionary"""
-        return cls(
-            block_id=data["id"],
-            log_sequence=data["sequence"],
-            label=data["label"],
-            predicted=data.get("predicted", ""),
-            confidence=data.get("confidence", 0.0),
-            semantic_emb=data.get("semantic_emb"),
-            encode=data.get("encode"),
-            semantic_repr=data.get("semantic_repr", []),
-        )

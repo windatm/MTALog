@@ -20,7 +20,8 @@ from utils.main import (
     process_source_systems,
     process_target_system
 )
-from utils.training import train_model, evaluate_model
+from utils.training_new import train_model
+# evaluate_model will be implemented separately
 from CONSTANTS import PROJECT_ROOT
 from utils.analysis import (
     analyze_templates, analyze_vocabulary, analyze_overlap,
@@ -50,6 +51,32 @@ def parse_arguments():
                        help='Ratio of logs used for few-shot learning')
     parser.add_argument('--query_sample', type=float, default=1.0,
                        help='Ratio of query set to use for evaluation')
+    
+    # Meta-learning Parameters
+    parser.add_argument('--num_episodes', type=int, default=None,
+                       help='Number of training episodes (default: epochs * 100)')
+    parser.add_argument('--n_support_src', type=int, default=16,
+                       help='Number of support samples per source domain')
+    parser.add_argument('--n_query_src', type=int, default=16,
+                       help='Number of query samples per source domain')
+    parser.add_argument('--n_support_tgt', type=int, default=16,
+                       help='Number of support samples for target')
+    parser.add_argument('--n_query_tgt', type=int, default=16,
+                       help='Number of query samples for target')
+    
+    # Source Weighting Parameters
+    parser.add_argument('--source_weighting_mode', type=str, 
+                       default='reliability_plus_distance',
+                       choices=['none', 'distance_only', 'reliability_plus_distance'],
+                       help='Source weighting mode')
+    parser.add_argument('--w_r', type=float, default=1.0,
+                       help='Weight for reliability component')
+    parser.add_argument('--w_D', type=float, default=1.0,
+                       help='Weight for distance component')
+    parser.add_argument('--beta_margin', type=float, default=0.1,
+                       help='Margin weight in reliability computation')
+    parser.add_argument('--kappa', type=float, default=1.0,
+                       help='Temperature for softmax in α_s computation')
     
     # Analysis Parameters
     parser.add_argument('--analysis_output', type=str, default='analysis_results',
@@ -184,7 +211,7 @@ def create_analysis_report(template_analysis, vocab_analysis, overlap_results,
             avg_templates = results.get('templates_per_log_avg', 'N/A')
             if isinstance(avg_templates, (int, float)):
                 f.write(f"<td>{avg_templates:.2f}</td>")
-    else:
+            else:
                 f.write(f"<td>{avg_templates}</td>")
             
             f.write(f"<td>{len(results.get('templates_only_in_anomalous', []))}</td></tr>\n")
@@ -270,6 +297,20 @@ def main():
     params['query_sample_ratio'] = args.query_sample
     params['analysis_output'] = args.analysis_output
     
+    # Meta-learning parameters
+    params['num_episodes'] = args.num_episodes if args.num_episodes else args.epochs * 100
+    params['n_support_src'] = args.n_support_src
+    params['n_query_src'] = args.n_query_src
+    params['n_support_tgt'] = args.n_support_tgt
+    params['n_query_tgt'] = args.n_query_tgt
+    
+    # Source weighting parameters
+    params['source_weighting_mode'] = args.source_weighting_mode
+    params['w_r'] = args.w_r
+    params['w_D'] = args.w_D
+    params['beta_margin'] = args.beta_margin
+    params['kappa'] = args.kappa
+    
     # Setup logging
     logger = setup_logging(params)
     
@@ -278,8 +319,8 @@ def main():
         # Run analysis mode - stop at preprocessing and analyze data
         source_data, target_data = analysis_mode(params, logger)
     elif args.mode == 'train':
-    # Setup template encoder
-    template_encoder = setup_template_encoder(params)
+        # Setup template encoder
+        template_encoder = setup_template_encoder(params)
     
         # Process source systems
         source_data = process_source_systems(params, logger, template_encoder)

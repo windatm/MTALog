@@ -1,0 +1,484 @@
+PLAN IMPLEMENT – MULTI-SOURCE META-LEARNING VỚI SOURCE WEIGHTING α_s
+
+Giả định:
+
+Code PyTorch.
+
+Đã có encoder kiểu AttGRUModel (template-based).
+
+Đã có một model meta (vd MTALog).
+
+Đã có DataLoader riêng cho từng hệ thống log (BGL, HDFS, Thunderbird, …).
+
+Mục tiêu chính:
+
+Chuẩn hóa khái niệm Episode (support/query, multi-domain).
+
+Thêm pipeline tính prototype trên support.
+
+Thêm cơ chế source reliability r_s + khoảng cách D_s để sinh α_s.
+
+Dùng α_s để re-weight L_cls, L_align, L_CL trong train_on_episode().
+
+Có logging để debug.
+
+============================================================
+PHASE 0 – CHUẨN BỊ & BASELINE
+
+Tạo branch mới: feature/meta_source_weighting.
+
+Đảm bảo hiện có:
+
+training loop meta (hoặc ít nhất multi-source),
+
+classification_loss (CrossEntropy),
+
+nếu có: align_loss (MMD/CORAL), contrastive_loss (SupCon/InfoNCE).
+
+Chạy lại 1 thử nghiệm nhỏ để có baseline.
+
+TODO:
+[ ] Chạy lại training hiện tại, log F1/AUC baseline, lưu lại kết quả.
+
+============================================================
+PHASE 1 – DOMAINBATCH & EPISODE SAMPLER
+
+Định nghĩa DomainBatch (ví dụ trong domains.py):
+
+from dataclasses import dataclass
+from typing import List
+import torch
+
+@dataclass
+class DomainBatch:
+domain_id: str # "BGL", "HDFS", "Thunderbird", "TARGET", ...
+support_x: torch.Tensor # [N_supp, seq_len, ...]
+support_y: torch.Tensor # [N_supp]
+query_x: torch.Tensor # [N_query, seq_len, ...]
+query_y: torch.Tensor # [N_query]
+
+Viết episode_sampler (episode_sampler.py):
+
+from typing import Dict, List
+from torch.utils.data import DataLoader
+
+def sample_episode(
+domain_loaders: Dict[str, DataLoader],
+target_loader: DataLoader,
+n_support_src: int,
+n_query_src: int,
+n_support_tgt: int,
+n_query_tgt: int,
+) -> List[DomainBatch]:
+"""
+domain_loaders: {"BGL": loader_bgl, "HDFS": loader_hdfs, ...}
+target_loader: loader cho hệ thống đích
+Trả về list[DomainBatch] cho các domain + target trong 1 episode.
+"""
+domain_batches = []
+
+# TODO: tuỳ implement – có thể dùng iterator vòng, hoặc random sample
+# Gợi ý: chuẩn bị trước iterator cho mỗi DataLoader ở ngoài training loop.
+
+# Example sketch (pseudo):
+# for domain_id, loader in domain_loaders.items():
+#     x_supp, y_supp = next_batch(loader, n_support_src)
+#     x_query, y_query = next_batch(loader, n_query_src)
+#     domain_batches.append(DomainBatch(domain_id, x_supp, y_supp, x_query, y_query))
+#
+# target:
+# x_supp_t, y_supp_t = next_batch(target_loader, n_support_tgt)
+# x_query_t, y_query_t = next_batch(target_loader, n_query_tgt)
+# domain_batches.append(DomainBatch("TARGET", x_supp_t, y_supp_t, x_query_t, y_query_t))
+
+return domain_batches
+
+
+3) Tích hợp vào training loop (train_mtalog.py):
+
+for episode_idx in range(num_episodes):
+domain_batches = sample_episode(
+domain_loaders=src_loaders,
+target_loader=target_loader,
+n_support_src=K_src,
+n_query_src=Q_src,
+n_support_tgt=K_tgt,
+n_query_tgt=Q_tgt,
+)
+loss_dict = model.train_on_episode(domain_batches)
+# log loss_dict, metrics, v.v.
+
+TODO:
+[ ] Tạo DomainBatch.
+[ ] Viết sample_episode() và test với dummy tensors.
+[ ] Sửa training loop để dùng sample_episode().
+
+============================================================
+PHASE 2 – ENCODE_BATCH & PROTOTYPE PER DOMAIN
+
+Trong model meta (vd MTALog), thêm encode_batch:
+
+class MTALog(nn.Module):
+def init(self, encoder, classifier, ...):
+super().init()
+self.encoder = encoder # AttGRUModel hoặc tương đương
+self.classifier = classifier
+
+def encode_batch(self, x: torch.Tensor) -> torch.Tensor:
+    """
+    x: [N, seq_len, ...]
+    return: z: [N, d]
+    """
+    z = self.encoder(x)
+    return z
+
+
+2) Hàm compute_prototypes(domain_batches, model):
+
+from typing import Dict
+from collections import defaultdict
+import torch
+
+def compute_prototypes(
+domain_batches: List[DomainBatch],
+model: MTALog,
+) -> Dict[str, Dict[int, torch.Tensor]]:
+"""
+Trả về:
+prototypes[domain_id][class_y] = μ_d^y (tensor [d])
+"""
+prototypes: Dict[str, Dict[int, torch.Tensor]] = {}
+
+for db in domain_batches:
+    z_supp = model.encode_batch(db.support_x)  # [N_supp, d]
+    prot_per_class: Dict[int, torch.Tensor] = {}
+
+    for y_val in (0, 1):
+        mask = (db.support_y == y_val)
+        if mask.sum() == 0:
+            continue
+        mu = z_supp[mask].mean(dim=0)
+        prot_per_class[int(y_val)] = mu
+
+    prototypes[db.domain_id] = prot_per_class
+
+return prototypes
+
+
+TODO:
+[ ] Implement encode_batch() trong model.
+[ ] Implement compute_prototypes() và test với batch nhỏ.
+
+============================================================
+PHASE 3 – SOURCE RELIABILITY r_s VÀ DISTANCE D_s
+
+Ý tưởng: với mỗi source s, dùng prototype của s để phân loại support target theo nearest-prototype → đo accuracy + margin (r_s). Đồng thời đo khoảng cách prototype source–target D_s. Kết hợp thành score_s.
+
+Tạo file source_weighting.py.
+
+from typing import Dict, List
+import torch
+from torch import nn
+
+def compute_source_scores(
+prototypes: Dict[str, Dict[int, torch.Tensor]],
+domain_batches: List[DomainBatch],
+model: MTALog,
+w_r: float = 1.0,
+w_D: float = 1.0,
+beta_margin: float = 0.1,
+) -> Dict[str, float]:
+"""
+Tính score_s cho từng source domain (không gồm 'TARGET').
+"""
+# 1. Lấy DomainBatch của TARGET
+target_db = None
+for db in domain_batches:
+if db.domain_id == "TARGET":
+target_db = db
+break
+if target_db is None:
+raise ValueError("TARGET domain not found in domain_batches.")
+
+z_T_supp = model.encode_batch(target_db.support_x)  # [N_T, d]
+y_T_supp = target_db.support_y                     # [N_T]
+
+scores: Dict[str, float] = {}
+
+# 2. Lặp qua từng source domain
+for db in domain_batches:
+    if db.domain_id == "TARGET":
+        continue
+    s = db.domain_id
+
+    prot_s = prototypes.get(s, {})
+    prot_T = prototypes.get("TARGET", {})
+
+    # 2.1. Tính D_s (khoảng cách prototype)
+    D_s = 0.0
+    for y_val in (0, 1):
+        if y_val in prot_s and y_val in prot_T:
+            D_s += torch.dist(prot_s[y_val], prot_T[y_val], p=2).item() ** 2
+
+    # 2.2. Nearest-prototype prediction trên support TARGET
+    preds = []
+    margins = []
+
+    for i in range(z_T_supp.size(0)):
+        z_i = z_T_supp[i]
+
+        # Giả sử cả 0 và 1 đều tồn tại; nếu thiếu class nào, cần xử lý edge case.
+        d0 = torch.dist(z_i, prot_s[0], p=2) if 0 in prot_s else None
+        d1 = torch.dist(z_i, prot_s[1], p=2) if 1 in prot_s else None
+
+        if d0 is None or d1 is None:
+            # Nếu thiếu prototype 0 hoặc 1, có thể bỏ qua hoặc đặt penalty lớn.
+            # Ở đây tạm penalty, coi source này kém.
+            preds.append(1 - int(y_T_supp[i].item()))  # cố ý sai
+            margins.append(0.0)
+            continue
+
+        # true / wrong distance
+        true_y = int(y_T_supp[i].item())
+        d_true = d0 if true_y == 0 else d1
+        d_wrong = d1 if true_y == 0 else d0
+
+        pred_y = 0 if d0 < d1 else 1
+        preds.append(pred_y)
+
+        margin = (d_wrong - d_true).item()
+        margins.append(margin)
+
+    if len(preds) == 0:
+        # không đủ thông tin, score rất thấp
+        scores[s] = -1e6
+        continue
+
+    preds_t = torch.tensor(preds, device=y_T_supp.device)
+    acc_s = (preds_t == y_T_supp).float().mean().item()
+    margin_s = float(sum(margins) / len(margins))
+
+    r_s = acc_s + beta_margin * margin_s
+
+    # 2.3. Kết hợp r_s và D_s
+    score_s = w_r * r_s - w_D * D_s
+    scores[s] = score_s
+
+return scores
+
+
+TODO:
+[ ] Implement compute_source_scores().
+[ ] Test với prototypes dummy + target dummy.
+
+============================================================
+PHASE 4 – SCORES → α_s, TÍCH HỢP VÀO LOSS
+
+Hàm chuyển score_s → α_s (softmax):
+
+def scores_to_alphas(scores: Dict[str, float], kappa: float = 1.0) -> Dict[str, float]:
+import torch
+keys = list(scores.keys())
+vals = torch.tensor([scores[k] for k in keys])
+alphas_tensor = torch.softmax(kappa * vals, dim=0)
+return {k: float(v) for k, v in zip(keys, alphas_tensor)}
+
+Trong MTALog.train_on_episode(domain_batches):
+
+def train_on_episode(self, domain_batches: List[DomainBatch]) -> dict:
+self.train()
+# 1. Compute prototypes
+prototypes = compute_prototypes(domain_batches, self)
+
+# 2. Compute source scores & alphas
+scores = compute_source_scores(
+    prototypes=prototypes,
+    domain_batches=domain_batches,
+    model=self,
+    w_r=1.0,
+    w_D=1.0,
+    beta_margin=0.1,
+)
+alphas = scores_to_alphas(scores, kappa=1.0)
+# alphas: {'BGL': α_BGL, 'HDFS': α_HDFS, ...}
+
+# 3. Compute L_cls (weighted CE trên query các domain)
+L_cls = 0.0
+total_weight = 0.0
+
+for db in domain_batches:
+    z_query = self.encode_batch(db.query_x)          # [N_q, d]
+    logits = self.classifier(z_query)                # [N_q, 2]
+    ce = F.cross_entropy(logits, db.query_y, reduction="none")  # [N_q]
+
+    if db.domain_id == "TARGET":
+        w_domain = 1.0  # hoặc β cố định
+    else:
+        w_domain = alphas.get(db.domain_id, 0.0)
+
+    L_cls = L_cls + w_domain * ce.sum()
+    total_weight += w_domain * ce.numel()
+
+if total_weight > 0:
+    L_cls = L_cls / total_weight
+else:
+    L_cls = torch.tensor(0.0, device=next(self.parameters()).device)
+
+# 4. Compute L_align (ví dụ dùng prototype normal)
+# Ví dụ đơn giản: align prototype normal target với weighted average normal sources
+
+lambda_align = self.lambda_align
+lambda_cl = self.lambda_cl
+
+if 0 in prototypes.get("TARGET", {}):
+    mu_T_0 = prototypes["TARGET"][0]
+    src_mu0_weighted = None
+    norm_alpha = 0.0
+
+    for db in domain_batches:
+        if db.domain_id == "TARGET":
+            continue
+        s = db.domain_id
+        if 0 not in prototypes[s]:
+            continue
+        alpha_s = alphas.get(s, 0.0)
+        if src_mu0_weighted is None:
+            src_mu0_weighted = alpha_s * prototypes[s][0]
+        else:
+            src_mu0_weighted = src_mu0_weighted + alpha_s * prototypes[s][0]
+        norm_alpha += alpha_s
+
+    if src_mu0_weighted is not None and norm_alpha > 0:
+        src_mu0_weighted = src_mu0_weighted / norm_alpha
+        L_align = torch.dist(mu_T_0, src_mu0_weighted, p=2) ** 2
+    else:
+        L_align = torch.tensor(0.0, device=mu_T_0.device)
+else:
+    L_align = torch.tensor(0.0, device=next(self.parameters()).device)
+
+# 5. Compute L_CL (nếu đã có hàm supcon_loss)
+# Ví dụ: gom tất cả embedding (support + query), gán weight theo alpha_s / 1.0
+
+# pseudo:
+# z_all, y_all, w_all = [], [], []
+# for db in domain_batches:
+#     z_supp = self.encode_batch(db.support_x)
+#     z_query = self.encode_batch(db.query_x)
+#     if db.domain_id == "TARGET":
+#         w_domain = 1.0
+#     else:
+#         w_domain = alphas.get(db.domain_id, 0.0)
+#     append z_supp, z_query vào z_all; y vào y_all; weight w_domain vào w_all
+#
+# L_CL = supcon_loss(z_all, y_all, weights=w_all)
+
+L_CL = torch.tensor(0.0, device=next(self.parameters()).device)  # placeholder
+
+L_total = L_cls + lambda_align * L_align + lambda_cl * L_CL
+
+self.optimizer.zero_grad()
+L_total.backward()
+self.optimizer.step()
+
+return {
+    "L_total": float(L_total.item()),
+    "L_cls": float(L_cls.item()),
+    "L_align": float(L_align.item()),
+    "L_CL": float(L_CL.item()),
+}
+
+
+TODO:
+[ ] Tích hợp tính alphas vào train_on_episode().
+[ ] Sửa L_cls, L_align, L_CL để dùng α_s phù hợp.
+
+============================================================
+PHASE 5 – LOGGING & SANITY CHECK
+
+Log α_s mỗi vài episode:
+
+if episode_idx % log_interval == 0:
+print(f"[Episode {episode_idx}] alphas: {alphas}")
+
+Log r_s, D_s, score_s bên trong compute_source_scores() (có thể trả thêm debug_info hoặc in ra trong vài episode đầu).
+
+Kiểm tra scale các loss:
+
+L_cls ~ 0.1–1
+
+L_align ~ 0.01–1
+
+L_CL ~ 0.01–1
+Điều chỉnh lambda_align, lambda_cl cho hợp lý.
+
+TODO:
+[ ] Thêm logging α_s, r_s, D_s, score_s.
+[ ] Chạy 10–20 episode, kiểm tra log và scale loss.
+
+============================================================
+PHASE 6 – THÍ NGHIỆM & ABLATION
+
+Thêm flag cấu hình: source_weighting_mode ∈ {"none", "distance_only", "reliability_plus_distance"}.
+
+Trong compute_source_scores():
+
+Nếu mode = "none": luôn trả scores = {s: 0.0}, sau đó alphas = uniform.
+
+Nếu mode = "distance_only":
+score_s = -D_s
+
+Nếu mode = "reliability_plus_distance":
+score_s = w_r * r_s - w_D * D_s
+
+Thực nghiệm:
+
+Mode "none": baseline meta (multi-source, không weighting).
+
+Mode "distance_only": chỉ dựa trên khoảng cách prototype.
+
+Mode "reliability_plus_distance": full cơ chế đề xuất.
+
+So sánh F1/AUC trên target.
+
+TODO:
+[ ] Thêm cấu hình source_weighting_mode.
+[ ] Chạy 3 mode, lưu kết quả, so sánh.
+
+============================================================
+PHASE 7 – REFACTOR & DOCUMENT
+
+Trong MTALog (hoặc model chính), tách rõ các hàm:
+
+encode_batch(x)
+
+compute_episode_prototypes(domain_batches)
+
+compute_source_alphas(domain_batches, prototypes)
+
+compute_episode_losses(domain_batches, alphas)
+
+Thêm docstring theo style paper:
+
+Ví dụ:
+
+def compute_source_alphas(...):
+"""
+Compute source weights α_s per episode.
+α_s is derived from a reliability score r_s (prototype-based classification
+accuracy + margin on target support) and distributional distance D_s between
+source and target prototypes.
+"""
+
+Viết README_meta_source_weighting.md:
+
+Mô tả:
+
+Scenario multi-source → few-shot target.
+
+Cơ chế α_s (reliability + distance).
+
+Cách chạy, tham số chính, ví dụ lệnh train.
+
+TODO:
+[ ] Refactor meta-step functions cho rõ ràng.
+[ ] Viết README mô tả pipeline và cơ chế α_s.
